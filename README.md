@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Backoffice Vendedores Minum
 
 Painel administrativo em React + Firebase para importar clientes, acompanhar rotas e gerenciar vendedores do app Android Vendedores Minum.
@@ -70,3 +71,7 @@ As regras finais devem ser aplicadas no console do Firebase, nao no frontend. Ex
 - `npm run build`: gera a versao de producao.
 - `npm run preview`: serve o build localmente.
 - `npm run lint`: valida o codigo.
+=======
+# backoffice-vendedores-minum
+Backoffcie do app para vendedores da Minum
+>>>>>>> d28e6cf01786860d874653d472aa3ed555bc65fb
