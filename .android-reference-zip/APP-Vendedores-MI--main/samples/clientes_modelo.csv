@@ -1,0 +1,5 @@
+nome,endereco,cidade,estado,latitude,longitude,telefone,segmento,status,observacoes
+Mercado Central,Rua Alfa 100,Sao Paulo,SP,-23.55052,-46.63331,11999990000,Varejo,Ativo,Cliente com alto potencial
+Padaria Boa Massa,Avenida Beta 250,Sao Paulo,SP,-23.55610,-46.64020,11888880000,Alimentos,Ativo,Visitar pela manha
+Distribuidora Norte,Rua Gama 45,Guarulhos,SP,-23.45431,-46.53367,11777770000,Distribuicao,Ativo,Entrada pela lateral
+

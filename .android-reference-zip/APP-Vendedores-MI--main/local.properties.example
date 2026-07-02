@@ -1,0 +1,4 @@
+# Copie este arquivo para local.properties e informe sua chave do Google Maps.
+# O app compila com valor vazio, mas o mapa real exige uma chave válida.
+MAPS_API_KEY=
+
