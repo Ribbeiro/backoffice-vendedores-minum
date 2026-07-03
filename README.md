@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Backoffice Vendedores Minum
 
 Painel administrativo em React + Firebase para importar clientes, acompanhar rotas e gerenciar vendedores do app Android Vendedores Minum.
@@ -28,6 +27,31 @@ npm run dev
 - `plannedRoutes/{routeId}`: rotas planejadas ou realizadas pelo app Android.
 - `plannedRouteStops/{routeId}/{stopId}`: paradas de cada rota.
 
+## Integracao com o app Android
+
+Os dois projetos usam o mesmo Firebase Auth e o mesmo Realtime Database.
+
+- O back office importa clientes para `customers/{id}`.
+- O app Android baixa `customers` apos login autorizado e salva no Room para uso offline.
+- O app Android publica rotas salvas em `plannedRoutes/{routeId}`.
+- O app Android publica as paradas em `plannedRouteStops/{routeId}/{customerId}`.
+- O back office escuta esses nos em tempo real para alimentar dashboard e historico.
+
+Campos minimos em `users/{uid}`:
+
+```json
+{
+  "email": "usuario@empresa.com",
+  "name": "Nome do usuario",
+  "role": "admin",
+  "active": true,
+  "allowedAccess": true,
+  "deleted": false
+}
+```
+
+Use `role: "admin"` para acesso ao painel e `role: "vendedor"` para acesso ao app.
+
 ## Importacao de clientes
 
 A tela Upload aceita `.xlsx` e `.xls` com estes cabecalhos:
@@ -50,16 +74,16 @@ As regras finais devem ser aplicadas no console do Firebase, nao no frontend. Ex
       }
     },
     "customers": {
-      ".read": "auth != null && root.child('users').child(auth.uid).child('active').val() !== false",
+      ".read": "auth != null && root.child('users').child(auth.uid).child('active').val() === true && root.child('users').child(auth.uid).child('deleted').val() !== true",
       ".write": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'"
     },
     "plannedRoutes": {
       ".read": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'",
-      ".write": "auth != null"
+      ".write": "auth != null && root.child('users').child(auth.uid).child('active').val() === true && root.child('users').child(auth.uid).child('deleted').val() !== true"
     },
     "plannedRouteStops": {
       ".read": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'",
-      ".write": "auth != null"
+      ".write": "auth != null && root.child('users').child(auth.uid).child('active').val() === true && root.child('users').child(auth.uid).child('deleted').val() !== true"
     }
   }
 }
@@ -71,7 +95,3 @@ As regras finais devem ser aplicadas no console do Firebase, nao no frontend. Ex
 - `npm run build`: gera a versao de producao.
 - `npm run preview`: serve o build localmente.
 - `npm run lint`: valida o codigo.
-=======
-# backoffice-vendedores-minum
-Backoffcie do app para vendedores da Minum
->>>>>>> d28e6cf01786860d874653d472aa3ed555bc65fb
