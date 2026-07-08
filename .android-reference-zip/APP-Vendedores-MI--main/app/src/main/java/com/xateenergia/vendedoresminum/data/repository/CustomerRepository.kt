@@ -4,6 +4,7 @@ import androidx.room.withTransaction
 import com.xateenergia.vendedoresminum.data.dao.CustomerDao
 import com.xateenergia.vendedoresminum.data.database.AppDatabase
 import com.xateenergia.vendedoresminum.data.entities.CustomerEntity
+import com.xateenergia.vendedoresminum.data.remote.FirebaseSyncService
 import com.xateenergia.vendedoresminum.domain.model.Customer
 import com.xateenergia.vendedoresminum.domain.model.CustomerFilters
 import com.xateenergia.vendedoresminum.utils.BoundingBox
@@ -15,7 +16,8 @@ import kotlinx.coroutines.flow.map
 @Singleton
 class CustomerRepository @Inject constructor(
     private val database: AppDatabase,
-    private val customerDao: CustomerDao
+    private val customerDao: CustomerDao,
+    private val firebaseSyncService: FirebaseSyncService
 ) {
     fun observeCount(): Flow<Int> = customerDao.observeCount()
 
@@ -58,6 +60,16 @@ class CustomerRepository @Inject constructor(
     suspend fun deleteAll() {
         database.withTransaction {
             customerDao.deleteAll()
+        }
+    }
+
+    suspend fun syncCustomersFromRemote(): Int {
+        val customers = firebaseSyncService.fetchCustomers()
+        if (customers.isEmpty()) return 0
+
+        return database.withTransaction {
+            customerDao.deleteAll()
+            customerDao.insertAll(customers).size
         }
     }
 

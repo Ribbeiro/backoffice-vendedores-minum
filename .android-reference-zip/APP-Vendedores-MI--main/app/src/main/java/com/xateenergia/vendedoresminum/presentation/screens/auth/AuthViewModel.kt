@@ -8,6 +8,7 @@ import com.xateenergia.vendedoresminum.domain.model.AuthUser
 import com.xateenergia.vendedoresminum.domain.model.UserAccessResult
 import com.xateenergia.vendedoresminum.domain.model.UserProfile
 import com.xateenergia.vendedoresminum.domain.repository.AuthRepository
+import com.xateenergia.vendedoresminum.data.repository.CustomerRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Job
@@ -19,7 +20,8 @@ import kotlinx.coroutines.launch
 
 @HiltViewModel
 class AuthViewModel @Inject constructor(
-    private val authRepository: AuthRepository
+    private val authRepository: AuthRepository,
+    private val customerRepository: CustomerRepository
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(AuthUiState())
@@ -28,6 +30,7 @@ class AuthViewModel @Inject constructor(
     private var profileJob: Job? = null
     private var accessDeniedMessage: String? = null
     private val lastLoginUpdatedFor = mutableSetOf<String>()
+    private val customersSyncedFor = mutableSetOf<String>()
 
     init {
         observeSession()
@@ -181,6 +184,7 @@ class AuthViewModel @Inject constructor(
                             AuthUiState(status = AuthStatus.Authenticated(result.profile))
                         }
                         updateLastLoginOnce(result.profile.uid)
+                        syncCustomersOnce(result.profile.uid)
                     }
 
                     is UserAccessResult.Denied -> blockAccess(result.reason.toFriendlyMessage())
@@ -195,6 +199,16 @@ class AuthViewModel @Inject constructor(
 
         viewModelScope.launch {
             authRepository.markLastLogin(uid)
+        }
+    }
+
+    private fun syncCustomersOnce(uid: String) {
+        if (!customersSyncedFor.add(uid)) return
+
+        viewModelScope.launch {
+            runCatching {
+                customerRepository.syncCustomersFromRemote()
+            }
         }
     }
 
