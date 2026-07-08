@@ -10,7 +10,7 @@ export const excelHeaders = [
   'Cidade',
   'Client - Phone',
   'Deal - Segment',
-  'Responsável',
+  'Responsavel',
   'Ultima Atualizacao',
   'Deal - Distributor',
   'Deal - Responsable Salesperson',
@@ -32,54 +32,55 @@ export function asArray(value) {
 }
 
 export function normalizeCustomer(row, index) {
-  const rawId = row.ID || row.id || row.Id;
+  const rawId = readCell(row, 'ID', 'id', 'Id');
   const id = String(rawId || `linha-${index + 1}`).trim();
-  const address = clean(row['Deal - Address']);
-  const cnpjCpf = clean(row['(CPF/CNPJ)']);
-  const clientName = clean(row['Client - Name']);
-  const expectedRevenue = clean(row['Deal - Expected Revenue']);
-  const latitude = numberOrNull(row.latitude);
-  const longitude = numberOrNull(row.longitude);
-  const pipelineStage = clean(row['Deal - Pipeline Stage']);
-  const responsavel = clean(row.Responsável);
-  const responsableSalesperson = clean(row['Deal - Responsable Salesperson']);
+  const address = clean(readCell(row, 'Deal - Address'));
+  const cnpjCpf = clean(readCell(row, '(CPF/CNPJ)', 'CPF/CNPJ', 'CNPJ', 'CPF'));
+  const clientName = clean(readCell(row, 'Client - Name'));
+  const expectedRevenue = clean(readCell(row, 'Deal - Expected Revenue'));
+  const latitude = numberOrNull(readCell(row, 'latitude', 'Latitude', 'lat'));
+  const longitude = numberOrNull(readCell(row, 'longitude', 'Longitude', 'lng', 'lon'));
+  const pipelineStage = clean(readCell(row, 'Deal - Pipeline Stage'));
+  const responsavel = clean(readCell(row, 'Responsavel', 'Responsável', 'ResponsÃ¡vel'));
+  const responsableSalesperson = clean(readCell(row, 'Deal - Responsable Salesperson'));
+  const opportunity = clean(readCell(row, 'Opportunity'));
 
   return {
     id,
-    opportunity: clean(row.Opportunity),
+    opportunity,
     cpfCnpj: cnpjCpf,
     cnpjCpf,
     externalId: id,
     dealAddress: address,
     address,
-    email: clean(row['Client - Email']),
-    state: clean(row['Client - State']),
-    city: clean(row.Cidade),
-    phone: clean(row['Client - Phone']),
-    segment: clean(row['Deal - Segment']),
+    email: clean(readCell(row, 'Client - Email')),
+    state: normalizeState(readCell(row, 'Client - State', 'State', 'UF', 'Estado')),
+    city: clean(readCell(row, 'Cidade', 'City', 'Client - City')),
+    phone: clean(readCell(row, 'Client - Phone')),
+    segment: clean(readCell(row, 'Deal - Segment')),
     responsible: responsavel,
     responsavel,
-    lastUpdate: clean(row['Ultima Atualizacao']),
-    ultimaAtualizacao: clean(row['Ultima Atualizacao']),
-    distributor: clean(row['Deal - Distributor']),
+    lastUpdate: clean(readCell(row, 'Ultima Atualizacao', 'Última Atualização')),
+    ultimaAtualizacao: clean(readCell(row, 'Ultima Atualizacao', 'Última Atualização')),
+    distributor: clean(readCell(row, 'Deal - Distributor')),
     responsibleSalesperson: responsableSalesperson,
     responsableSalesperson,
-    tags: clean(row['Deal - Tags']),
+    tags: clean(readCell(row, 'Deal - Tags')),
     expectedRevenue,
     expectedRevenueValue: numberOrNull(expectedRevenue),
-    notes: clean(row['Deal - Notes']),
-    origin: clean(row['Deal - Origem']),
-    origem: clean(row['Deal - Origem']),
+    notes: clean(readCell(row, 'Deal - Notes')),
+    origin: clean(readCell(row, 'Deal - Origem')),
+    origem: clean(readCell(row, 'Deal - Origem')),
     pipelineStage,
     status: pipelineStage,
-    name: clientName || clean(row.Opportunity) || id,
+    name: clientName || opportunity || id,
     clientName,
     latitude: latitude ?? 0,
     longitude: longitude ?? 0,
-    country: clean(row.Country),
+    country: clean(readCell(row, 'Country', 'Pais', 'País')),
     active: true,
     raw: excelHeaders.reduce((acc, header) => {
-      acc[header] = row[header] ?? '';
+      acc[header] = readCell(row, header);
       return acc;
     }, {}),
   };
@@ -155,6 +156,70 @@ function clean(value) {
 
 function numberOrNull(value) {
   if (value === undefined || value === null || value === '') return null;
-  const parsed = Number(String(value).replace(/\./g, '').replace(',', '.'));
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+
+  const normalized = String(value).trim().replace(/\s+/g, '');
+  const parsed = Number(
+    normalized.includes(',')
+      ? normalized.replace(/\./g, '').replace(',', '.')
+      : normalized,
+  );
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function readCell(row, ...headers) {
+  for (const header of headers) {
+    if (row[header] !== undefined && row[header] !== null && row[header] !== '') {
+      return row[header];
+    }
+  }
+
+  const normalizedHeaders = headers.map(normalizeHeader);
+  const matchingKey = Object.keys(row).find((key) => normalizedHeaders.includes(normalizeHeader(key)));
+  return matchingKey ? row[matchingKey] : '';
+}
+
+function normalizeHeader(value) {
+  return String(value || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
+function normalizeState(value) {
+  const state = clean(value);
+  const normalized = normalizeHeader(state);
+  const statesByName = {
+    acre: 'AC',
+    alagoas: 'AL',
+    amapa: 'AP',
+    amazonas: 'AM',
+    bahia: 'BA',
+    ceara: 'CE',
+    'distrito federal': 'DF',
+    'espirito santo': 'ES',
+    goias: 'GO',
+    maranhao: 'MA',
+    'mato grosso': 'MT',
+    'mato grosso do sul': 'MS',
+    'minas gerais': 'MG',
+    para: 'PA',
+    paraiba: 'PB',
+    parana: 'PR',
+    pernambuco: 'PE',
+    piaui: 'PI',
+    'rio de janeiro': 'RJ',
+    'rio grande do norte': 'RN',
+    'rio grande do sul': 'RS',
+    rondonia: 'RO',
+    roraima: 'RR',
+    'santa catarina': 'SC',
+    'sao paulo': 'SP',
+    sergipe: 'SE',
+    tocantins: 'TO',
+  };
+
+  return statesByName[normalized] || state.toUpperCase();
 }

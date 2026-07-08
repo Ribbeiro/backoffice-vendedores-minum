@@ -75,8 +75,8 @@ export default function Upload() {
       const result = await importCustomers(rows, mode);
       setProgress(100);
       setMessage(`${result.processed} clientes importados com sucesso.`);
-    } catch {
-      setError('Falha ao salvar no Firebase. Confira sua conexao, variaveis .env e regras de acesso.');
+    } catch (uploadError) {
+      setError(`Falha ao salvar no Firebase: ${uploadError.message || 'confira sua conexao, variaveis .env e regras de acesso.'}`);
       setProgress(0);
     }
   }
