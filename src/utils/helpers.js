@@ -1,4 +1,4 @@
-import { normalizeDate, todayKey } from './formatters';
+﻿import { normalizeDate, todayKey } from './formatters.js';
 
 export const excelHeaders = [
   'Opportunity',
@@ -32,18 +32,19 @@ export function asArray(value) {
 }
 
 export function normalizeCustomer(row, index) {
-  const rawId = readCell(row, 'ID', 'id', 'Id');
+  const coordinates = parseCoordinates(readCell(row, 'Coordenadas', 'Coordinates'));
+  const rawId = readCell(row, 'ID', 'id', 'Id', 'CNPJ', 'CPF/CNPJ', '(CPF/CNPJ)');
   const id = String(rawId || `linha-${index + 1}`).trim();
-  const address = clean(readCell(row, 'Deal - Address'));
+  const address = clean(readCell(row, 'Deal - Address', 'Endereco sugerido', 'Endereço sugerido', 'Endereco cadastral', 'Endereço cadastral'));
   const cnpjCpf = clean(readCell(row, '(CPF/CNPJ)', 'CPF/CNPJ', 'CNPJ', 'CPF'));
-  const clientName = clean(readCell(row, 'Client - Name'));
-  const expectedRevenue = clean(readCell(row, 'Deal - Expected Revenue'));
-  const latitude = numberOrNull(readCell(row, 'latitude', 'Latitude', 'lat'));
-  const longitude = numberOrNull(readCell(row, 'longitude', 'Longitude', 'lng', 'lon'));
-  const pipelineStage = clean(readCell(row, 'Deal - Pipeline Stage'));
-  const responsavel = clean(readCell(row, 'Responsavel', 'Responsável', 'ResponsÃ¡vel'));
+  const clientName = clean(readCell(row, 'Client - Name', 'Razao social', 'Razão social', 'Nome Fantasia'));
+  const expectedRevenue = clean(readCell(row, 'Deal - Expected Revenue', 'Valor_final', 'Valor final'));
+  const latitude = numberOrNull(readCell(row, 'latitude', 'Latitude', 'lat')) ?? coordinates?.latitude;
+  const longitude = numberOrNull(readCell(row, 'longitude', 'Longitude', 'lng', 'lon')) ?? coordinates?.longitude;
+  const pipelineStage = clean(readCell(row, 'Deal - Pipeline Stage', 'Status'));
+  const responsavel = clean(readCell(row, 'Responsavel', 'Responsável', 'Decisor sugerido', 'ResponsÃ¡vel', 'ResponsÃƒÂ¡vel'));
   const responsableSalesperson = clean(readCell(row, 'Deal - Responsable Salesperson'));
-  const opportunity = clean(readCell(row, 'Opportunity'));
+  const opportunity = clean(readCell(row, 'Opportunity', 'Razao social', 'Razão social', 'Nome Fantasia'));
 
   return {
     id,
@@ -53,31 +54,31 @@ export function normalizeCustomer(row, index) {
     externalId: id,
     dealAddress: address,
     address,
-    email: clean(readCell(row, 'Client - Email')),
+    email: clean(readCell(row, 'Client - Email', 'E-mail de cadastro', 'E-mail da contabilidade')),
     state: normalizeState(readCell(row, 'Client - State', 'State', 'UF', 'Estado')),
-    city: clean(readCell(row, 'Cidade', 'City', 'Client - City')),
-    phone: clean(readCell(row, 'Client - Phone')),
-    segment: clean(readCell(row, 'Deal - Segment')),
+    city: clean(readCell(row, 'Cidade', 'City', 'Client - City', 'Municipio', 'Município')),
+    phone: clean(readCell(row, 'Client - Phone', 'Telefone de contato', 'Whatsapp', 'Telefone de cadastro', 'Telefone de contabilidade')),
+    segment: clean(readCell(row, 'Deal - Segment', 'Segmento Datlo', 'Categoria Datlo', 'Classe da CNAE', 'Seção da CNAE')),
     responsible: responsavel,
     responsavel,
-    lastUpdate: clean(readCell(row, 'Ultima Atualizacao', 'Última Atualização')),
-    ultimaAtualizacao: clean(readCell(row, 'Ultima Atualizacao', 'Última Atualização')),
+    lastUpdate: clean(readCell(row, 'Ultima Atualizacao', 'Última Atualização', 'Ãšltima AtualizaÃ§Ã£o')),
+    ultimaAtualizacao: clean(readCell(row, 'Ultima Atualizacao', 'Última Atualização', 'Ãšltima AtualizaÃ§Ã£o')),
     distributor: clean(readCell(row, 'Deal - Distributor')),
     responsibleSalesperson: responsableSalesperson,
     responsableSalesperson,
-    tags: clean(readCell(row, 'Deal - Tags')),
+    tags: clean(readCell(row, 'Deal - Tags', 'Tags_ID')),
     expectedRevenue,
     expectedRevenueValue: numberOrNull(expectedRevenue),
-    notes: clean(readCell(row, 'Deal - Notes')),
-    origin: clean(readCell(row, 'Deal - Origem')),
-    origem: clean(readCell(row, 'Deal - Origem')),
+    notes: clean(readCell(row, 'Deal - Notes', 'Quadro societario', 'Quadro societário')),
+    origin: clean(readCell(row, 'Deal - Origem', 'Origem')),
+    origem: clean(readCell(row, 'Deal - Origem', 'Origem')),
     pipelineStage,
     status: pipelineStage,
     name: clientName || opportunity || id,
     clientName,
     latitude: latitude ?? 0,
     longitude: longitude ?? 0,
-    country: clean(readCell(row, 'Country', 'Pais', 'País')),
+    country: clean(readCell(row, 'Country', 'Pais', 'País', 'PaÃ­s')) || 'Brasil',
     active: true,
     raw: excelHeaders.reduce((acc, header) => {
       acc[header] = readCell(row, header);
@@ -85,7 +86,6 @@ export function normalizeCustomer(row, index) {
     }, {}),
   };
 }
-
 export function calculateMetrics({ customers, routes, sellers, routeStops }) {
   const activeSellers = sellers.filter(isUserAllowed);
   const today = todayKey();
@@ -167,6 +167,17 @@ function numberOrNull(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function parseCoordinates(value) {
+  const text = clean(value);
+  if (!text) return null;
+
+  const [latitudeText, longitudeText] = text.split(',').map((part) => part.trim());
+  const latitude = numberOrNull(latitudeText);
+  const longitude = numberOrNull(longitudeText);
+
+  if (latitude === null || longitude === null) return null;
+  return { latitude, longitude };
+}
 function readCell(row, ...headers) {
   for (const header of headers) {
     if (row[header] !== undefined && row[header] !== null && row[header] !== '') {

@@ -31,6 +31,8 @@ export async function importCustomers(customers, mode = 'merge') {
 
   if (mode === 'replace') {
     await remove(ref(database, 'customers'));
+  } else {
+    await removePlaceholderCustomers();
   }
 
   const updates = {};
@@ -52,6 +54,26 @@ export async function importCustomers(customers, mode = 'merge') {
   }
 
   return { processed: customers.length };
+}
+
+async function removePlaceholderCustomers() {
+  const snapshot = await get(child(dbRef, 'customers'));
+  if (!snapshot.exists()) return;
+
+  const updates = {};
+  snapshot.forEach((customerSnapshot) => {
+    const key = customerSnapshot.key || '';
+    const value = customerSnapshot.val() || {};
+    const externalId = String(value.externalId || value.id || key);
+
+    if (/^linha-\d+$/i.test(key) || /^linha-\d+$/i.test(externalId)) {
+      updates[`customers/${key}`] = null;
+    }
+  });
+
+  if (Object.keys(updates).length > 0) {
+    await update(ref(database), updates);
+  }
 }
 
 function toFirebaseCustomer(customer) {
