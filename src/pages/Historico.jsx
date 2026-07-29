@@ -32,11 +32,15 @@ const statusLabel = (status) => ({
 }[String(status || '').toLowerCase()] || status || 'Pendente');
 
 const feedbackLocation = (stop) => {
-  const latitude = stop.feedbackLocation?.latitude ?? stop.feedbackLatitude;
-  const longitude = stop.feedbackLocation?.longitude ?? stop.feedbackLongitude;
+  const latitude = stop.feedbackLocation?.latitude ?? stop.feedbackLatitude ?? stop.visitLocation?.latitude;
+  const longitude = stop.feedbackLocation?.longitude ?? stop.feedbackLongitude ?? stop.visitLocation?.longitude;
   if (latitude === undefined || latitude === null || longitude === undefined || longitude === null) return '-';
   return `${Number(latitude).toFixed(5)}, ${Number(longitude).toFixed(5)}`;
 };
+
+const feedbackText = (stop) => stop.feedback || stop.visitFeedback || stop.feedbackText || stop.observation || stop.notes || '-';
+
+const feedbackDateTime = (stop) => stop.feedbackAt || stop.visitedAt || stop.visitAt || stop.arrivalTime || stop.horario || stop.timestamp;
 
 export default function Historico() {
   const { routes, routeStops, users } = useData();
@@ -83,11 +87,10 @@ export default function Historico() {
                       <TableRow>
                         <TableCell>Ordem</TableCell>
                         <TableCell>Cliente</TableCell>
-                        <TableCell>Horario</TableCell>
-                        <TableCell>Status</TableCell>
+                        <TableCell>Data e horario</TableCell>
+                        <TableCell>Localizacao no momento</TableCell>
                         <TableCell>Feedback</TableCell>
-                        <TableCell>Local do feedback</TableCell>
-                        <TableCell>Registrado em</TableCell>
+                        <TableCell>Status</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
@@ -95,11 +98,10 @@ export default function Historico() {
                         <TableRow key={stop.id}>
                           <TableCell>{stop.order ?? stop.ordem ?? index + 1}</TableCell>
                           <TableCell>{stop.customerName || stop.clienteNome || stop.name || stop.customerId || '-'}</TableCell>
-                          <TableCell>{formatDateTime(stop.arrivalTime || stop.horario || stop.timestamp)}</TableCell>
-                          <TableCell>{statusLabel(stop.status || stop.result)}</TableCell>
-                          <TableCell sx={{ minWidth: 240 }}>{stop.feedback || '-'}</TableCell>
+                          <TableCell>{formatDateTime(feedbackDateTime(stop))}</TableCell>
                           <TableCell>{feedbackLocation(stop)}</TableCell>
-                          <TableCell>{formatDateTime(stop.feedbackAt || stop.visitedAt || stop.timestamp)}</TableCell>
+                          <TableCell sx={{ minWidth: 240 }}>{feedbackText(stop)}</TableCell>
+                          <TableCell>{statusLabel(stop.status || stop.result)}</TableCell>
                         </TableRow>
                       ))}
                       {stops.length === 0 && (
