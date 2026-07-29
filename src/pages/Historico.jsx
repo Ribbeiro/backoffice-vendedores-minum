@@ -20,6 +20,24 @@ import { useData } from '../hooks/useData';
 import { asArray } from '../utils/helpers';
 import { formatDateTime } from '../utils/formatters';
 
+const statusLabel = (status) => ({
+  planned: 'Planejada',
+  in_progress: 'Em andamento',
+  'em andamento': 'Em andamento',
+  completed: 'Concluida',
+  concluida: 'Concluida',
+  not_completed: 'Nao concluida',
+  visited: 'Visitado',
+  not_visited: 'Nao visitado',
+}[String(status || '').toLowerCase()] || status || 'Pendente');
+
+const feedbackLocation = (stop) => {
+  const latitude = stop.feedbackLocation?.latitude ?? stop.feedbackLatitude;
+  const longitude = stop.feedbackLocation?.longitude ?? stop.feedbackLongitude;
+  if (latitude === undefined || latitude === null || longitude === undefined || longitude === null) return '-';
+  return `${Number(latitude).toFixed(5)}, ${Number(longitude).toFixed(5)}`;
+};
+
 export default function Historico() {
   const { routes, routeStops, users } = useData();
   const usersById = useMemo(() => Object.fromEntries(users.map((user) => [user.id, user])), [users]);
@@ -45,6 +63,7 @@ export default function Historico() {
                   <Stack direction="row" spacing={1} flexWrap="wrap">
                     <Chip label={seller?.name || seller?.email || sellerUid || 'Sem vendedor'} size="small" />
                     <Chip label={formatDateTime(route.createdAt || route.createdAtTimestamp)} size="small" variant="outlined" />
+                    <Chip label={statusLabel(route.status)} size="small" color={route.status === 'completed' || route.status === 'concluida' ? 'success' : 'default'} />
                     <Chip label={`${stops.length} paradas`} size="small" color="primary" />
                   </Stack>
                 </Stack>
@@ -53,6 +72,11 @@ export default function Historico() {
                 <Typography variant="body2" color="text.secondary" mb={2}>
                   Origem: {route.origin?.latitude || route.origem?.latitude || route.startLatitude || '-'}, {route.origin?.longitude || route.origem?.longitude || route.startLongitude || '-'}
                 </Typography>
+                {route.notCompletedReason && (
+                  <Typography variant="body2" color="error" mb={2}>
+                    Motivo da nao conclusao da rota: {route.notCompletedReason}
+                  </Typography>
+                )}
                 <TableContainer component={Paper} variant="outlined">
                   <Table size="small">
                     <TableHead>
@@ -61,6 +85,9 @@ export default function Historico() {
                         <TableCell>Cliente</TableCell>
                         <TableCell>Horario</TableCell>
                         <TableCell>Status</TableCell>
+                        <TableCell>Feedback</TableCell>
+                        <TableCell>Local do feedback</TableCell>
+                        <TableCell>Registrado em</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
@@ -68,13 +95,16 @@ export default function Historico() {
                         <TableRow key={stop.id}>
                           <TableCell>{stop.order ?? stop.ordem ?? index + 1}</TableCell>
                           <TableCell>{stop.customerName || stop.clienteNome || stop.name || stop.customerId || '-'}</TableCell>
-                          <TableCell>{formatDateTime(stop.arrivalTime || stop.horario || stop.visitedAt || stop.timestamp)}</TableCell>
-                          <TableCell>{stop.status || stop.result || '-'}</TableCell>
+                          <TableCell>{formatDateTime(stop.arrivalTime || stop.horario || stop.timestamp)}</TableCell>
+                          <TableCell>{statusLabel(stop.status || stop.result)}</TableCell>
+                          <TableCell sx={{ minWidth: 240 }}>{stop.feedback || '-'}</TableCell>
+                          <TableCell>{feedbackLocation(stop)}</TableCell>
+                          <TableCell>{formatDateTime(stop.feedbackAt || stop.visitedAt || stop.timestamp)}</TableCell>
                         </TableRow>
                       ))}
                       {stops.length === 0 && (
                         <TableRow>
-                          <TableCell colSpan={4} align="center">
+                          <TableCell colSpan={7} align="center">
                             Nenhuma parada encontrada.
                           </TableCell>
                         </TableRow>
