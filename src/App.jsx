@@ -7,6 +7,7 @@ import Clientes from './pages/Clientes.jsx';
 import Historico from './pages/Historico.jsx';
 import Login from './pages/Login.jsx';
 import Upload from './pages/Upload.jsx';
+import Usuarios from './pages/Usuarios.jsx';
 import Vendedores from './pages/Vendedores.jsx';
 
 export default function App() {
@@ -28,6 +29,7 @@ export default function App() {
           <Route path="upload" element={<Upload />} />
           <Route path="historico" element={<Historico />} />
           <Route path="vendedores" element={<Vendedores />} />
+          <Route path="usuarios" element={<Usuarios />} />
         </Route>
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>

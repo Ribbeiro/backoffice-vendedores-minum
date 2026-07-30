@@ -21,6 +21,7 @@ import HistoryIcon from '@mui/icons-material/History';
 import LogoutIcon from '@mui/icons-material/Logout';
 import MenuIcon from '@mui/icons-material/Menu';
 import PeopleAltIcon from '@mui/icons-material/PeopleAlt';
+import PersonAddAlt1Icon from '@mui/icons-material/PersonAddAlt1';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import { useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
@@ -33,6 +34,7 @@ const navItems = [
   { label: 'Upload', to: '/upload', icon: <UploadFileIcon /> },
   { label: 'Historico', to: '/historico', icon: <HistoryIcon /> },
   { label: 'Vendedores', to: '/vendedores', icon: <GroupIcon /> },
+  { label: 'Criar usuarios', to: '/usuarios', icon: <PersonAddAlt1Icon /> },
 ];
 
 export default function Layout() {

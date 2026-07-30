@@ -1,4 +1,4 @@
-import { initializeApp } from 'firebase/app';
+import { getApp, getApps, initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getDatabase } from 'firebase/database';
 
@@ -14,8 +14,16 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 
+// Uma segunda instancia do Auth cria a conta sem trocar a sessao do administrador
+// que esta usando o backoffice.
+const provisioningAppName = 'user-provisioning';
+const provisioningApp = getApps().some((item) => item.name === provisioningAppName)
+  ? getApp(provisioningAppName)
+  : initializeApp(firebaseConfig, provisioningAppName);
+
 export const auth = getAuth(app);
 export const database = getDatabase(app);
+export const provisioningAuth = getAuth(provisioningApp);
 export default app;
 
 // A protecao real deve estar nas regras do Firebase Realtime Database.

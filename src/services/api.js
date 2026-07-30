@@ -8,8 +8,8 @@ import {
   set,
   update,
 } from 'firebase/database';
-import { auth } from './firebase';
-import { database } from './firebase';
+import { createUserWithEmailAndPassword, deleteUser, signOut } from 'firebase/auth';
+import { auth, database, provisioningAuth } from './firebase';
 
 const dbRef = ref(database);
 
@@ -144,4 +144,67 @@ export async function updateUserAccess(uid, active) {
 
 export async function saveUserProfile(uid, profile) {
   await set(ref(database, `users/${uid}`), profile);
+}
+
+/**
+ * Cria a credencial no Firebase Authentication e o perfil que o Android e o
+ * backoffice usam para identificar papel, acesso e estado do usuario.
+ */
+export async function createManagedUser({ name, email, password, role, state }) {
+  if (!auth.currentUser) {
+    throw new Error('Sua sessao expirou. Entre novamente para criar usuarios.');
+  }
+
+  const normalizedName = String(name || '').trim();
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  const normalizedRole = String(role || '').trim().toLowerCase();
+  const normalizedState = String(state || '').trim().toUpperCase();
+
+  if (!normalizedName || !normalizedEmail || !password) {
+    throw new Error('Preencha nome, email e senha.');
+  }
+  if (!['admin', 'vendedor'].includes(normalizedRole)) {
+    throw new Error('Selecione um tipo de usuario valido.');
+  }
+  if (normalizedRole === 'vendedor' && !normalizedState) {
+    throw new Error('Selecione o estado do vendedor.');
+  }
+
+  let createdUser = null;
+  try {
+    const credential = await createUserWithEmailAndPassword(provisioningAuth, normalizedEmail, password);
+    createdUser = credential.user;
+
+    const profile = {
+      name: normalizedName,
+      displayName: normalizedName,
+      email: normalizedEmail,
+      role: normalizedRole,
+      active: true,
+      allowedAccess: true,
+      deleted: false,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      createdBy: auth.currentUser.uid,
+    };
+
+    if (normalizedRole === 'vendedor') {
+      profile.state = normalizedState;
+    }
+
+    await set(ref(database, `users/${createdUser.uid}`), profile);
+    return { uid: createdUser.uid, ...profile };
+  } catch (error) {
+    // Evita deixar uma conta no Authentication sem o perfil correspondente.
+    if (createdUser) {
+      try {
+        await deleteUser(createdUser);
+      } catch {
+        // A mensagem original continua sendo mais util para o administrador.
+      }
+    }
+    throw error;
+  } finally {
+    await signOut(provisioningAuth);
+  }
 }
