@@ -17,6 +17,14 @@
     "plannedRouteStops": {
       ".read": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'",
       ".write": "auth != null && root.child('users').child(auth.uid).child('active').val() === true && root.child('users').child(auth.uid).child('deleted').val() !== true"
+    },
+    "routeCreationLimits": {
+      "$uid": {
+        ".read": "auth != null && (auth.uid === $uid || root.child('users').child(auth.uid).child('role').val() === 'admin')",
+        "$day": {
+          ".write": "auth != null && ((auth.uid === $uid && root.child('users').child(auth.uid).child('active').val() === true && root.child('users').child(auth.uid).child('deleted').val() !== true && newData.child('count').isNumber() && newData.child('count').val() >= 0 && newData.child('count').val() <= 5 && newData.child('limit').val() === 5 && newData.child('day').val() === $day) || root.child('users').child(auth.uid).child('role').val() === 'admin')"
+        }
+      }
     }
   }
 }
