@@ -18,10 +18,11 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import PageHeader from '../components/PageHeader';
 import { useData } from '../hooks/useData';
 import { asArray } from '../utils/helpers';
-import { formatDateTime } from '../utils/formatters';
+import { formatDate, formatDateTime } from '../utils/formatters';
 
 const statusLabel = (status) => ({
   planned: 'Planejada',
+  assigned: 'Atribuida',
   in_progress: 'Em andamento',
   'em andamento': 'Em andamento',
   completed: 'Concluida',
@@ -58,6 +59,10 @@ export default function Historico() {
           const sellerUid = route.sellerUid || route.vendedor || route.uid;
           const seller = usersById[sellerUid];
           const stops = asArray(routeStops[route.id]).sort((a, b) => Number(a.order ?? a.ordem ?? 0) - Number(b.order ?? b.ordem ?? 0));
+          const reportedStops = stops.filter((stop) => ['visited', 'not_visited'].includes(String(stop.status || stop.result || '').toLowerCase()));
+          const visitedStops = stops.filter((stop) => String(stop.status || stop.result || '').toLowerCase() === 'visited');
+          const completionPercent = stops.length ? Math.round((visitedStops.length / stops.length) * 100) : 0;
+          const isSharedAssignment = route.assignmentType === 'shared' || route.source === 'admin_assignment';
 
           return (
             <Accordion key={route.id} disableGutters>
@@ -69,6 +74,7 @@ export default function Historico() {
                     <Chip label={formatDateTime(route.createdAt || route.createdAtTimestamp)} size="small" variant="outlined" />
                     <Chip label={statusLabel(route.status)} size="small" color={route.status === 'completed' || route.status === 'concluida' ? 'success' : 'default'} />
                     <Chip label={`${stops.length} paradas`} size="small" color="primary" />
+                    {isSharedAssignment && <Chip label="Atribuida" size="small" color="secondary" />}
                   </Stack>
                 </Stack>
               </AccordionSummary>
@@ -80,6 +86,17 @@ export default function Historico() {
                   <Typography variant="body2" color="error" mb={2}>
                     Motivo da nao conclusao da rota: {route.notCompletedReason}
                   </Typography>
+                )}
+                {isSharedAssignment && (
+                  <Stack spacing={0.5} mb={2}>
+                    <Typography variant="body2" color="text.secondary">
+                      Prazo: {formatDate(route.dueDate)} | Meta: {route.targetCompletionPercent || 90}% | Resultado: {visitedStops.length}/{stops.length} visitados ({completionPercent}%)
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Feedbacks registrados: {reportedStops.length}/{stops.length} | Criada por: {route.createdByName || route.createdByUid || '-'}
+                    </Typography>
+                    {route.assignmentNotes && <Typography variant="body2">Orientacoes: {route.assignmentNotes}</Typography>}
+                  </Stack>
                 )}
                 <TableContainer component={Paper} variant="outlined">
                   <Table size="small">

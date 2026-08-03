@@ -19,6 +19,63 @@
       ".read": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'",
       ".write": "auth != null && root.child('users').child(auth.uid).child('active').val() === true && root.child('users').child(auth.uid).child('deleted').val() !== true"
     },
+    "sharedRoutesBySeller": {
+      "$uid": {
+        ".read": "auth != null && (auth.uid === $uid || root.child('users').child(auth.uid).child('role').val() === 'admin')",
+        "$routeId": {
+          ".write": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'",
+          "status": {
+            ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && (newData.val() === 'in_progress' || newData.val() === 'completed')"
+          },
+          "isCompleted": {
+            ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.isBoolean()"
+          },
+          "startedAt": {
+            ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.isNumber()"
+          },
+          "completedAt": {
+            ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.isNumber()"
+          },
+          "updatedAt": {
+            ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.isNumber()"
+          },
+          "stops": {
+            "$stopId": {
+              "status": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && (newData.val() === 'visited' || newData.val() === 'not_visited')"
+              },
+              "result": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && (newData.val() === 'visited' || newData.val() === 'not_visited')"
+              },
+              "wasVisited": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.isBoolean()"
+              },
+              "feedback": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.isString()"
+              },
+              "feedbackAt": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.isNumber()"
+              },
+              "visitedAt": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.isNumber()"
+              },
+              "feedbackLatitude": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.isNumber()"
+              },
+              "feedbackLongitude": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.isNumber()"
+              },
+              "feedbackLocation": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.hasChildren(['latitude', 'longitude'])"
+              },
+              "updatedAt": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.isNumber()"
+              }
+            }
+          }
+        }
+      }
+    },
     "routeCreationLimits": {
       "$uid": {
         ".read": "auth != null && (auth.uid === $uid || root.child('users').child(auth.uid).child('role').val() === 'admin')",

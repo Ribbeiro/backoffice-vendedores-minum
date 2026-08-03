@@ -4,6 +4,7 @@ import Layout from './components/Layout.jsx';
 import PrivateRoute from './components/PrivateRoute.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import Clientes from './pages/Clientes.jsx';
+import CriarRota from './pages/CriarRota.jsx';
 import Historico from './pages/Historico.jsx';
 import Login from './pages/Login.jsx';
 import Upload from './pages/Upload.jsx';
@@ -26,6 +27,7 @@ export default function App() {
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="clientes" element={<Clientes />} />
+          <Route path="criar-rota" element={<CriarRota />} />
           <Route path="upload" element={<Upload />} />
           <Route path="historico" element={<Historico />} />
           <Route path="vendedores" element={<Vendedores />} />

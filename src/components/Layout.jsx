@@ -23,6 +23,7 @@ import MenuIcon from '@mui/icons-material/Menu';
 import PeopleAltIcon from '@mui/icons-material/PeopleAlt';
 import PersonAddAlt1Icon from '@mui/icons-material/PersonAddAlt1';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
+import AddRoadIcon from '@mui/icons-material/AddRoad';
 import { Alert } from '@mui/material';
 import { useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
@@ -34,6 +35,7 @@ const navItems = [
   { label: 'Dashboard', to: '/dashboard', icon: <DashboardIcon /> },
   { label: 'Clientes', to: '/clientes', icon: <PeopleAltIcon /> },
   { label: 'Upload', to: '/upload', icon: <UploadFileIcon /> },
+  { label: 'Criar rota', to: '/criar-rota', icon: <AddRoadIcon /> },
   { label: 'Historico', to: '/historico', icon: <HistoryIcon /> },
   { label: 'Vendedores', to: '/vendedores', icon: <GroupIcon /> },
   { label: 'Criar usuarios', to: '/usuarios', icon: <PersonAddAlt1Icon /> },

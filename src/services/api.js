@@ -1,7 +1,10 @@
+/* global fetch */
+
 import {
   child,
   get,
   onValue,
+  push,
   ref,
   remove,
   serverTimestamp,
@@ -135,6 +138,12 @@ function isInvalidFirebaseKeyChar(char) {
   return code <= 31 || code === 127 || ['.', '#', '$', '/', '[', ']'].includes(char);
 }
 
+function hasValidCoordinates(customer) {
+  const latitude = Number(customer?.latitude);
+  const longitude = Number(customer?.longitude);
+  return Number.isFinite(latitude) && Number.isFinite(longitude) && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180 && !(latitude === 0 && longitude === 0);
+}
+
 export async function updateUserAccess(uid, active) {
   await update(ref(database, `users/${uid}`), {
     active,
@@ -146,6 +155,117 @@ export async function updateUserAccess(uid, active) {
 
 export async function saveUserProfile(uid, profile) {
   await set(ref(database, `users/${uid}`), profile);
+}
+
+/** Calcula uma estimativa entre as paradas para que o administrador possa planejar a missao. */
+export async function estimateSharedRoute(customers) {
+  if (customers.length < 2) return { distanceMeters: 0, durationSeconds: 0 };
+  if (customers.length > 24) throw new Error('Uma rota compartilhada aceita no maximo 24 clientes.');
+
+  const token = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN;
+  if (!token) throw new Error('Token publico do Mapbox nao configurado.');
+
+  const coordinates = customers
+    .map((customer) => `${Number(customer.longitude)},${Number(customer.latitude)}`)
+    .join(';');
+  const response = await fetch(
+    `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coordinates}?overview=false&access_token=${encodeURIComponent(token)}`,
+  );
+  const payload = await response.json();
+  if (!response.ok || !payload.routes?.[0]) {
+    throw new Error(payload.message || 'O Mapbox nao conseguiu estimar esta rota.');
+  }
+  return {
+    distanceMeters: Number(payload.routes[0].distance || 0),
+    durationSeconds: Number(payload.routes[0].duration || 0),
+  };
+}
+
+/**
+ * Cria a missao no historico central e uma copia privada para o vendedor designado.
+ * A copia e somente o canal de distribuicao; o desempenho permanece em plannedRoutes.
+ */
+export async function createSharedRouteAssignment({ seller, name, dueDate, targetCompletionPercent, notes, customers, estimate }) {
+  if (!auth.currentUser) throw new Error('Sua sessao expirou. Entre novamente.');
+  if (!seller?.id) throw new Error('Selecione o vendedor responsavel.');
+  if (!dueDate) throw new Error('Informe a data para cumprimento da rota.');
+  if (!customers?.length) throw new Error('Selecione pelo menos um cliente.');
+  if (customers.length > 24) throw new Error('Selecione no maximo 24 clientes por rota.');
+  if (customers.some((customer) => !hasValidCoordinates(customer))) {
+    throw new Error('Todos os clientes da rota precisam ter latitude e longitude validas.');
+  }
+
+  const routeReference = push(ref(database, 'plannedRoutes'));
+  const routeId = routeReference.key;
+  if (!routeId) throw new Error('Nao foi possivel gerar o identificador da rota.');
+
+  const target = Math.min(100, Math.max(1, Number(targetCompletionPercent) || 90));
+  const routeName = String(name || '').trim() || `Rota ${dueDate}`;
+  const route = {
+    id: routeId,
+    name: routeName,
+    source: 'admin_assignment',
+    assignmentType: 'shared',
+    sellerUid: seller.id,
+    sellerName: seller.name || seller.displayName || seller.email || seller.id,
+    sellerEmail: seller.email || null,
+    state: seller.state || null,
+    dueDate,
+    targetCompletionPercent: target,
+    targetCompletedStops: Math.ceil((customers.length * target) / 100),
+    assignmentNotes: String(notes || '').trim() || null,
+    status: 'assigned',
+    isCompleted: false,
+    stopCount: customers.length,
+    estimatedDistanceMeters: estimate?.distanceMeters ?? null,
+    estimatedDurationSeconds: estimate?.durationSeconds ?? null,
+    createdByUid: auth.currentUser.uid,
+    createdByName: auth.currentUser.displayName || auth.currentUser.email || auth.currentUser.uid,
+    createdAt: serverTimestamp(),
+    createdAtTimestamp: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  const stops = {};
+  customers.forEach((customer, index) => {
+    const customerKey = String(customer.externalId || customer.id || index + 1);
+    const stopId = `stop_${String(index + 1).padStart(3, '0')}_${toFirebaseKey(customerKey)}`;
+    stops[stopId] = {
+      id: stopId,
+      routeId,
+      customerId: String(customer.id || customerKey),
+      customerExternalId: String(customer.externalId || customerKey),
+      customerName: customer.name || customer.clientName || customer.opportunity || customerKey,
+      clientName: customer.clientName || null,
+      opportunity: customer.opportunity || null,
+      cnpjCpf: customer.cnpjCpf || customer.cpfCnpj || null,
+      address: customer.address || customer.dealAddress || null,
+      city: customer.city || null,
+      state: customer.state || seller.state || null,
+      phone: customer.phone || null,
+      email: customer.email || null,
+      segment: customer.segment || null,
+      pipelineStage: customer.pipelineStage || customer.status || null,
+      expectedRevenue: customer.expectedRevenue || null,
+      latitude: Number(customer.latitude),
+      longitude: Number(customer.longitude),
+      order: index + 1,
+      status: 'assigned',
+      timestamp: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+  });
+
+  const updates = {
+    [`plannedRoutes/${routeId}`]: route,
+    [`sharedRoutesBySeller/${seller.id}/${routeId}`]: { ...route, stops },
+  };
+  Object.entries(stops).forEach(([stopId, stop]) => {
+    updates[`plannedRouteStops/${routeId}/${stopId}`] = stop;
+  });
+
+  await update(ref(database), updates);
+  return { id: routeId, ...route };
 }
 
 /**
