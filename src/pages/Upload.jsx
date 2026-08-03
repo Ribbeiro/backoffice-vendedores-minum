@@ -21,6 +21,7 @@ import {
   Typography,
 } from '@mui/material';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
+import DownloadIcon from '@mui/icons-material/Download';
 import SaveIcon from '@mui/icons-material/Save';
 import PageHeader from '../components/PageHeader';
 import { importCustomers } from '../services/api';
@@ -81,9 +82,24 @@ export default function Upload() {
     }
   }
 
+  function handleDownloadTemplate() {
+    const worksheet = XLSX.utils.aoa_to_sheet([excelHeaders]);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Modelo leads');
+    XLSX.writeFile(workbook, 'modelo-importacao-leads-minum.xlsx');
+  }
+
   return (
     <>
-      <PageHeader title="Upload de clientes" subtitle="Importe uma planilha Excel e grave os dados no no customers." />
+      <PageHeader
+        title="Upload de clientes"
+        subtitle="Importe uma planilha Excel e grave os dados no no customers."
+        action={
+          <Button variant="outlined" startIcon={<DownloadIcon />} onClick={handleDownloadTemplate}>
+            Baixar modelo
+          </Button>
+        }
+      />
       <Stack spacing={2}>
         {error && <Alert severity="error">{error}</Alert>}
         {message && <Alert severity="success">{message}</Alert>}

@@ -23,8 +23,10 @@ import MenuIcon from '@mui/icons-material/Menu';
 import PeopleAltIcon from '@mui/icons-material/PeopleAlt';
 import PersonAddAlt1Icon from '@mui/icons-material/PersonAddAlt1';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
+import { Alert } from '@mui/material';
 import { useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
+import { useData } from '../hooks/useData';
 
 const drawerWidth = 248;
 
@@ -41,6 +43,7 @@ export default function Layout() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const isDesktop = useMediaQuery('(min-width:900px)');
   const { logout, profile } = useAuth();
+  const { error } = useData();
   const navigate = useNavigate();
 
   async function handleLogout() {
@@ -134,6 +137,7 @@ export default function Layout() {
       </Box>
 
       <Box component="main" flex={1} sx={{ p: { xs: 2, md: 3 }, mt: 8, width: { md: `calc(100% - ${drawerWidth}px)` } }}>
+        {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
         <Outlet />
       </Box>
     </Box>

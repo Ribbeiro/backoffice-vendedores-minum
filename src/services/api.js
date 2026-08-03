@@ -18,10 +18,12 @@ export async function getUserProfile(uid) {
   return snapshot.exists() ? snapshot.val() : null;
 }
 
-export function subscribePath(path, callback) {
-  return onValue(ref(database, path), (snapshot) => {
-    callback(snapshot.exists() ? snapshot.val() : {});
-  });
+export function subscribePath(path, callback, onError) {
+  return onValue(
+    ref(database, path),
+    (snapshot) => callback(snapshot.exists() ? snapshot.val() : {}),
+    (error) => onError?.(error),
+  );
 }
 
 export async function importCustomers(customers, mode = 'merge') {
