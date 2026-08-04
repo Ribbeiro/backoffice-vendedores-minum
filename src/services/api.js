@@ -157,27 +157,111 @@ export async function saveUserProfile(uid, profile) {
   await set(ref(database, `users/${uid}`), profile);
 }
 
-/** Calcula uma estimativa entre as paradas para que o administrador possa planejar a missao. */
-export async function estimateSharedRoute(customers) {
-  if (customers.length < 2) return { distanceMeters: 0, durationSeconds: 0 };
-  if (customers.length > 24) throw new Error('Uma rota compartilhada aceita no maximo 24 clientes.');
+/**
+ * Busca a rota que sera efetivamente percorrida entre as paradas escolhidas.
+ * A geometria e os trechos sao usados tanto no mapa de previa quanto na lista
+ * de distancias entre clientes.
+ */
+export async function getSharedRoutePreview(customers) {
+  if (customers.length < 2) return emptyRoutePreview();
+  validateRouteCustomers(customers);
 
+  const coordinates = serializeRouteCoordinates(customers);
+  const payload = await requestMapboxRoute(
+    `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coordinates}?geometries=geojson&overview=full&steps=false`,
+    'O Mapbox nao conseguiu calcular a rota entre as paradas.',
+  );
+
+  return toRoutePreview(payload.routes[0]);
+}
+
+/**
+ * Otimiza somente os clientes intermediarios. A primeira e a ultima parada
+ * continuam sendo a origem e o destino definidos pelo administrador.
+ */
+export async function optimizeSharedRoute(customers) {
+  if (customers.length < 3) {
+    return { ...await getSharedRoutePreview(customers), order: customers.map((_, index) => index) };
+  }
+  validateRouteCustomers(customers);
+
+  const coordinates = serializeRouteCoordinates(customers);
+  const payload = await requestMapboxRoute(
+    `https://api.mapbox.com/optimized-trips/v1/mapbox/driving-traffic/${coordinates}?source=first&destination=last&roundtrip=false&geometries=geojson&overview=full&steps=false`,
+    'O Mapbox nao conseguiu otimizar a ordem das paradas.',
+  );
+  const trip = payload.trips?.[0];
+  const order = (payload.waypoints || [])
+    .map((waypoint, originalIndex) => ({
+      originalIndex,
+      routeIndex: Number(waypoint.waypoint_index),
+    }))
+    .filter(({ routeIndex }) => Number.isInteger(routeIndex))
+    .sort((first, second) => first.routeIndex - second.routeIndex)
+    .map(({ originalIndex }) => originalIndex);
+
+  if (!trip || order.length !== customers.length) {
+    throw new Error('O Mapbox retornou uma otimizacao incompleta. Tente novamente.');
+  }
+
+  return { ...toRoutePreview(trip), order };
+}
+
+/** Mantem a API anterior para consumidores que precisem apenas do total da rota. */
+export async function estimateSharedRoute(customers) {
+  const preview = await getSharedRoutePreview(customers);
+  return {
+    distanceMeters: preview.distanceMeters,
+    durationSeconds: preview.durationSeconds,
+  };
+}
+
+function validateRouteCustomers(customers) {
+  if (customers.length > 24) throw new Error('Uma rota compartilhada aceita no maximo 24 clientes.');
+  if (customers.some((customer) => !hasValidCoordinates(customer))) {
+    throw new Error('Todos os clientes da rota precisam ter latitude e longitude validas.');
+  }
+}
+
+function serializeRouteCoordinates(customers) {
+  return customers
+    .map((customer) => `${Number(customer.longitude)},${Number(customer.latitude)}`)
+    .join(';');
+}
+
+async function requestMapboxRoute(url, fallbackMessage) {
   const token = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN;
   if (!token) throw new Error('Token publico do Mapbox nao configurado.');
 
-  const coordinates = customers
-    .map((customer) => `${Number(customer.longitude)},${Number(customer.latitude)}`)
-    .join(';');
-  const response = await fetch(
-    `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coordinates}?overview=false&access_token=${encodeURIComponent(token)}`,
-  );
+  const separator = url.includes('?') ? '&' : '?';
+  const response = await fetch(`${url}${separator}access_token=${encodeURIComponent(token)}`);
   const payload = await response.json();
-  if (!response.ok || !payload.routes?.[0]) {
-    throw new Error(payload.message || 'O Mapbox nao conseguiu estimar esta rota.');
+  if (!response.ok || (!payload.routes?.[0] && !payload.trips?.[0])) {
+    throw new Error(payload.message || fallbackMessage);
   }
+  return payload;
+}
+
+function toRoutePreview(route) {
   return {
-    distanceMeters: Number(payload.routes[0].distance || 0),
-    durationSeconds: Number(payload.routes[0].duration || 0),
+    distanceMeters: Number(route?.distance || 0),
+    durationSeconds: Number(route?.duration || 0),
+    geometry: route?.geometry?.type === 'LineString' ? route.geometry : null,
+    legs: (route?.legs || []).map((leg, index) => ({
+      fromIndex: index,
+      toIndex: index + 1,
+      distanceMeters: Number(leg.distance || 0),
+      durationSeconds: Number(leg.duration || 0),
+    })),
+  };
+}
+
+function emptyRoutePreview() {
+  return {
+    distanceMeters: 0,
+    durationSeconds: 0,
+    geometry: null,
+    legs: [],
   };
 }
 

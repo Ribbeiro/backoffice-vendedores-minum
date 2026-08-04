@@ -26,12 +26,14 @@ import {
   Typography,
 } from '@mui/material';
 import AddRoadIcon from '@mui/icons-material/AddRoad';
+import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import CalculateIcon from '@mui/icons-material/Calculate';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import PageHeader from '../components/PageHeader';
-import { createSharedRouteAssignment, estimateSharedRoute } from '../services/api';
+import RoutePreviewMap from '../components/RoutePreviewMap';
+import { createSharedRouteAssignment, getSharedRoutePreview, optimizeSharedRoute } from '../services/api';
 import { useData } from '../hooks/useData';
 
 const initialForm = {
@@ -48,7 +50,9 @@ export default function CriarRota() {
   const [search, setSearch] = useState('');
   const [selectedIds, setSelectedIds] = useState([]);
   const [estimate, setEstimate] = useState(null);
+  const [preview, setPreview] = useState(null);
   const [isEstimating, setIsEstimating] = useState(false);
+  const [isOptimizing, setIsOptimizing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -79,13 +83,13 @@ export default function CriarRota() {
   function chooseSeller(sellerId) {
     setField('sellerId', sellerId);
     setSelectedIds([]);
-    setEstimate(null);
+    clearRoutePreview();
   }
 
   function toggleCustomer(customer) {
     const id = customerKey(customer);
     setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
-    setEstimate(null);
+    clearRoutePreview();
   }
 
   function moveCustomer(index, direction) {
@@ -96,22 +100,57 @@ export default function CriarRota() {
       [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
       return next;
     });
+    clearRoutePreview();
+  }
+
+  function clearRoutePreview() {
     setEstimate(null);
+    setPreview(null);
   }
 
   async function handleEstimate() {
     setError('');
     if (selectedCustomers.length < 2) {
-      setEstimate({ distanceMeters: 0, durationSeconds: 0 });
+      const emptyPreview = { distanceMeters: 0, durationSeconds: 0, geometry: null, legs: [] };
+      setEstimate(emptyPreview);
+      setPreview(emptyPreview);
       return;
     }
     setIsEstimating(true);
     try {
-      setEstimate(await estimateSharedRoute(selectedCustomers));
+      const nextPreview = await getSharedRoutePreview(selectedCustomers);
+      setEstimate(nextPreview);
+      setPreview(nextPreview);
     } catch (estimateError) {
       setError(estimateError.message || 'Nao foi possivel estimar a rota.');
     } finally {
       setIsEstimating(false);
+    }
+  }
+
+  async function handleOptimizeRoute() {
+    setError('');
+    setSuccess('');
+    if (selectedCustomers.length < 2) {
+      setError('Selecione pelo menos dois clientes para otimizar a rota.');
+      return;
+    }
+
+    setIsOptimizing(true);
+    try {
+      const optimizedPreview = await optimizeSharedRoute(selectedCustomers);
+      const optimizedCustomers = optimizedPreview.order
+        .map((originalIndex) => selectedCustomers[originalIndex])
+        .filter(Boolean);
+
+      setSelectedIds(optimizedCustomers.map(customerKey));
+      setEstimate(optimizedPreview);
+      setPreview(optimizedPreview);
+      setSuccess('Ordem otimizada pelo Mapbox. Revise as paradas antes de atribuir a rota.');
+    } catch (optimizationError) {
+      setError(optimizationError.message || 'Nao foi possivel otimizar a rota.');
+    } finally {
+      setIsOptimizing(false);
     }
   }
 
@@ -129,7 +168,7 @@ export default function CriarRota() {
       setSuccess(`Rota ${route.name} atribuida a ${route.sellerName}.`);
       setForm(initialForm);
       setSelectedIds([]);
-      setEstimate(null);
+      clearRoutePreview();
     } catch (saveError) {
       setError(saveError.message || 'Nao foi possivel criar a rota compartilhada.');
     } finally {
@@ -162,13 +201,16 @@ export default function CriarRota() {
               <TextField label="Meta de conclusao" type="number" value={form.targetCompletionPercent} onChange={(event) => setField('targetCompletionPercent', event.target.value)} inputProps={{ min: 1, max: 100 }} helperText="Percentual desejado de clientes visitados." fullWidth />
               <TextField label="Orientacoes para o vendedor" value={form.notes} onChange={(event) => setField('notes', event.target.value)} multiline minRows={3} fullWidth />
               <Divider />
-              <Typography variant="subtitle2">Estimativa entre as paradas</Typography>
+              <Typography variant="subtitle2">Previa entre as paradas</Typography>
               <Typography variant="body2" color="text.secondary">
-                O app recalcula a primeira perna a partir da localizacao atual do vendedor.
+                O mapa considera as ruas. No app, a primeira perna e recalculada a partir da localizacao do vendedor.
               </Typography>
               {estimate && <Chip label={`${formatDistance(estimate.distanceMeters)} - ${formatDuration(estimate.durationSeconds)}`} color="primary" variant="outlined" />}
               <Button variant="outlined" startIcon={isEstimating ? <CircularProgress size={18} /> : <CalculateIcon />} onClick={handleEstimate} disabled={isEstimating || selectedCustomers.length === 0}>
-                Calcular estimativa
+                Atualizar mapa
+              </Button>
+              <Button variant="outlined" color="secondary" startIcon={isOptimizing ? <CircularProgress size={18} /> : <AutoFixHighIcon />} onClick={handleOptimizeRoute} disabled={isOptimizing || selectedCustomers.length < 2}>
+                Otimizar rota
               </Button>
               <Button type="submit" variant="contained" startIcon={isSaving ? <CircularProgress size={18} color="inherit" /> : <AddRoadIcon />} disabled={isSaving || !selectedSeller || selectedCustomers.length === 0}>
                 Atribuir rota
@@ -218,17 +260,26 @@ export default function CriarRota() {
               <Table stickyHeader size="small">
                 <TableHead><TableRow><TableCell>Ordem</TableCell><TableCell>Cliente</TableCell><TableCell align="right">Ajustar</TableCell></TableRow></TableHead>
                 <TableBody>
-                  {selectedCustomers.map((customer, index) => (
+                  {selectedCustomers.map((customer, index) => {
+                    const previousLeg = index > 0 ? preview?.legs?.[index - 1] : null;
+                    return (
                     <TableRow key={customerKey(customer)}>
                       <TableCell>{index + 1}</TableCell>
-                      <TableCell><Typography variant="body2" fontWeight={700}>{customer.name || customer.clientName || customer.opportunity}</Typography><Typography variant="caption" color="text.secondary">{customer.city || customer.state || '-'}</Typography></TableCell>
+                      <TableCell>
+                        <Typography variant="body2" fontWeight={700}>{customer.name || customer.clientName || customer.opportunity}</Typography>
+                        <Typography variant="caption" color="text.secondary" display="block">{customer.city || customer.state || '-'}</Typography>
+                        <Typography variant="caption" color={previousLeg ? 'primary.main' : 'text.secondary'} display="block">
+                          {index === 0 ? 'Inicio da rota' : previousLeg ? `${formatDistance(previousLeg.distanceMeters)} - ${formatDuration(previousLeg.durationSeconds)} desde a parada anterior` : 'Atualize o mapa para calcular este trecho'}
+                        </Typography>
+                      </TableCell>
                       <TableCell align="right">
                         <Tooltip title="Mover para cima"><span><IconButton size="small" onClick={() => moveCustomer(index, -1)} disabled={index === 0}><ArrowUpwardIcon fontSize="small" /></IconButton></span></Tooltip>
                         <Tooltip title="Mover para baixo"><span><IconButton size="small" onClick={() => moveCustomer(index, 1)} disabled={index === selectedCustomers.length - 1}><ArrowDownwardIcon fontSize="small" /></IconButton></span></Tooltip>
                         <Tooltip title="Remover"><IconButton size="small" onClick={() => toggleCustomer(customer)}><DeleteOutlineIcon fontSize="small" /></IconButton></Tooltip>
                       </TableCell>
                     </TableRow>
-                  ))}
+                    );
+                  })}
                   {selectedCustomers.length === 0 && <TableRow><TableCell colSpan={3} align="center">Selecione clientes ao lado.</TableCell></TableRow>}
                 </TableBody>
               </Table>
@@ -241,6 +292,19 @@ export default function CriarRota() {
               {recentAssignments.map((route) => <Typography key={route.id} variant="body2">{route.name} - {route.sellerName || route.sellerUid} - {route.status}</Typography>)}
               {recentAssignments.length === 0 && <Typography variant="body2" color="text.secondary">Nenhuma rota atribuida ainda.</Typography>}
             </Stack>
+          </Paper>
+        </Grid>
+
+        <Grid item xs={12}>
+          <Paper sx={{ p: 2.5 }}>
+            <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'flex-start', sm: 'center' }} gap={1} mb={2}>
+              <Box>
+                <Typography variant="h6">Pre-visualizacao da rota</Typography>
+                <Typography variant="body2" color="text.secondary">Verde: inicio. Vermelho: destino. Os demais pontos seguem a ordem exibida acima.</Typography>
+              </Box>
+              {preview && <Chip label={`${formatDistance(preview.distanceMeters)} - ${formatDuration(preview.durationSeconds)}`} color="primary" />}
+            </Stack>
+            <RoutePreviewMap customers={selectedCustomers} preview={preview} isLoading={isEstimating || isOptimizing} />
           </Paper>
         </Grid>
       </Grid>
