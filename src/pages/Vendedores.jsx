@@ -1,6 +1,4 @@
 import {
-  Chip,
-  IconButton,
   Paper,
   Stack,
   Switch,
@@ -10,11 +8,11 @@ import {
   TableContainer,
   TableHead,
   TableRow,
-  Tooltip,
   Typography,
 } from '@mui/material';
-import RefreshIcon from '@mui/icons-material/Refresh';
+import EmptyState from '../components/EmptyState';
 import PageHeader from '../components/PageHeader';
+import StatusIndicator from '../components/StatusIndicator';
 import { useData } from '../hooks/useData';
 import { getLastVisitForSeller, isUserAllowed } from '../utils/helpers';
 import { formatDateTime } from '../utils/formatters';
@@ -24,61 +22,44 @@ export default function Vendedores() {
 
   return (
     <>
-      <PageHeader
-        title="Vendedores"
-        subtitle="Usuarios com role vendedor e controle de acesso ao app."
-        action={
-          <Tooltip title="Dados atualizados em tempo real pelo Firebase">
-            <IconButton>
-              <RefreshIcon />
-            </IconButton>
-          </Tooltip>
-        }
-      />
-      <TableContainer component={Paper}>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell>Vendedor</TableCell>
-              <TableCell>Ultima visita</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell align="right">Acesso</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {sellers.map((seller) => {
-              const active = isUserAllowed(seller);
-              const lastVisit = getLastVisitForSeller(seller.id, routes, routeStops);
-              return (
-                <TableRow key={seller.id} hover>
-                  <TableCell>
-                    <Stack>
-                      <Typography fontWeight={700}>{seller.name || seller.displayName || seller.email || seller.id}</Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {seller.email || seller.id}
-                      </Typography>
-                    </Stack>
-                  </TableCell>
-                  <TableCell>{formatDateTime(lastVisit)}</TableCell>
-                  <TableCell>
-                    <Chip label={active ? 'Ativo' : 'Inativo'} color={active ? 'success' : 'default'} size="small" />
-                  </TableCell>
-                  <TableCell align="right">
-                    <Switch checked={active} onChange={(event) => updateSellerAccess(seller.id, event.target.checked)} />
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-            {sellers.length === 0 && (
+      <PageHeader title="Vendedores" subtitle="Usuarios com acesso ao app e acompanhamento de atividade recente." />
+      {sellers.length === 0 ? (
+        <Paper variant="outlined"><EmptyState title="Nenhum vendedor cadastrado" description="Crie uma conta de vendedor para disponibilizar as rotas e os clientes do estado correspondente." /></Paper>
+      ) : (
+        <TableContainer component={Paper} variant="outlined">
+          <Table>
+            <TableHead>
               <TableRow>
-                <TableCell colSpan={4} align="center">
-                  Nenhum vendedor encontrado.
-                </TableCell>
+                <TableCell>Vendedor</TableCell>
+                <TableCell>Ultima visita</TableCell>
+                <TableCell>Status</TableCell>
+                <TableCell align="right">Acesso</TableCell>
               </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+            </TableHead>
+            <TableBody>
+              {sellers.map((seller) => {
+                const active = isUserAllowed(seller);
+                const lastVisit = getLastVisitForSeller(seller.id, routes, routeStops);
+                return (
+                  <TableRow key={seller.id} hover>
+                    <TableCell>
+                      <Stack>
+                        <Typography fontWeight={700}>{seller.name || seller.displayName || seller.email || seller.id}</Typography>
+                        <Typography variant="caption" color="text.secondary">{seller.email || seller.id}</Typography>
+                      </Stack>
+                    </TableCell>
+                    <TableCell>{formatDateTime(lastVisit)}</TableCell>
+                    <TableCell><StatusIndicator status={active ? 'active' : 'inactive'} /></TableCell>
+                    <TableCell align="right">
+                      <Switch checked={active} onChange={(event) => updateSellerAccess(seller.id, event.target.checked)} inputProps={{ 'aria-label': `Alterar acesso de ${seller.name || seller.email || seller.id}` }} />
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
     </>
   );
 }

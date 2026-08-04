@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Box, Card, CardContent, Chip, Divider, Grid, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
+import { Box, Card, CardContent, Divider, Grid, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
 import PeopleAltIcon from '@mui/icons-material/PeopleAlt';
 import RouteIcon from '@mui/icons-material/Route';
 import TodayIcon from '@mui/icons-material/Today';
@@ -14,8 +14,11 @@ import {
 } from 'chart.js';
 import { Bar } from 'react-chartjs-2';
 import CustomerMap from '../components/CustomerMap';
+import EmptyState from '../components/EmptyState';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
+import StatusIndicator from '../components/StatusIndicator';
+import { minumTokens } from '../design/tokens';
 import { useData } from '../hooks/useData';
 import { buildLast7DaysVisits, calculateMetrics } from '../utils/helpers';
 import { formatDateTime } from '../utils/formatters';
@@ -60,7 +63,7 @@ export default function Dashboard() {
       {
         label: 'Visitas',
         data: visits.values,
-        backgroundColor: '#009279',
+        backgroundColor: minumTokens.brand.primary,
         borderRadius: 6,
       },
     ],
@@ -71,16 +74,16 @@ export default function Dashboard() {
       <PageHeader title="Dashboard" subtitle="Resumo operacional dos clientes, rotas e vendedores." />
       <Grid container spacing={2} mb={3}>
         <Grid item xs={12} sm={6} lg={3}>
-          <MetricCard label="Clientes" value={metrics.totalCustomers} icon={<PeopleAltIcon />} />
+          <MetricCard label="Clientes" value={metrics.totalCustomers} icon={PeopleAltIcon} />
         </Grid>
         <Grid item xs={12} sm={6} lg={3}>
-          <MetricCard label="Rotas" value={metrics.totalRoutes} icon={<RouteIcon />} color="secondary.main" />
+          <MetricCard label="Rotas" value={metrics.totalRoutes} icon={RouteIcon} color={minumTokens.brand.primary} />
         </Grid>
         <Grid item xs={12} sm={6} lg={3}>
-          <MetricCard label="Vendedores ativos" value={metrics.activeSellers} icon={<GroupIcon />} color="success.main" />
+          <MetricCard label="Vendedores ativos" value={metrics.activeSellers} icon={GroupIcon} color={minumTokens.feedback.success} />
         </Grid>
         <Grid item xs={12} sm={6} lg={3}>
-          <MetricCard label="Visitas hoje" value={metrics.visitsToday} icon={<TodayIcon />} color="#b45309" />
+          <MetricCard label="Visitas hoje" value={metrics.visitsToday} icon={TodayIcon} color={minumTokens.feedback.warning} />
         </Grid>
       </Grid>
 
@@ -93,9 +96,9 @@ export default function Dashboard() {
             </Typography>
           </Box>
           <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-            <MapLegend color="#5889FB" label={`Pendentes ${mapStatusCount.pending || 0}`} />
-            <MapLegend color="#009279" label={`Visitados ${mapStatusCount.visited || 0}`} />
-            <MapLegend color="#B9382F" label={`Nao visitados ${mapStatusCount.not_visited || 0}`} />
+            <MapLegend color={minumTokens.feedback.info} label={`Pendentes ${mapStatusCount.pending || 0}`} />
+            <MapLegend color={minumTokens.feedback.success} label={`Visitados ${mapStatusCount.visited || 0}`} />
+            <MapLegend color={minumTokens.feedback.error} label={`Nao visitados ${mapStatusCount.not_visited || 0}`} />
           </Stack>
         </Stack>
         <Grid container spacing={2}>
@@ -175,9 +178,7 @@ function CustomerDetails({ customer, routesById, usersById }) {
   if (!customer) {
     return (
       <Paper variant="outlined" sx={{ height: { xs: 'auto', lg: 590 }, minHeight: 220, p: 3, display: 'grid', placeItems: 'center' }}>
-        <Typography color="text.secondary" textAlign="center">
-          Selecione um cliente no mapa para consultar seus dados e feedbacks.
-        </Typography>
+        <EmptyState title="Selecione um cliente" description="Clique em um ponto do mapa para consultar dados e feedbacks de visitas." />
       </Paper>
     );
   }
@@ -208,7 +209,7 @@ function CustomerDetails({ customer, routesById, usersById }) {
         <Box>
           <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
             <Typography variant="h6" lineHeight={1.25}>{customer.name || customer.clientName || customer.id}</Typography>
-            <StatusChip status={customer.visitStatus} />
+            <StatusIndicator status={customer.visitStatus} label={statusLabel(customer.visitStatus)} />
           </Stack>
           <Typography variant="body2" color="text.secondary" mt={0.5}>
             {Number(customer.latitude).toFixed(5)}, {Number(customer.longitude).toFixed(5)}
@@ -239,7 +240,7 @@ function CustomerDetails({ customer, routesById, usersById }) {
             return (
               <Box key={`${visit.routeId}-${visit.id || index}-${visit.timestamp}`} borderLeft="3px solid" borderColor={visit.status === 'visited' ? 'success.main' : visit.status === 'not_visited' ? 'error.main' : 'primary.main'} pl={1.25}>
                 <Stack direction="row" justifyContent="space-between" spacing={1} alignItems="center">
-                  <StatusChip status={visit.status} />
+                  <StatusIndicator status={visit.status} label={statusLabel(visit.status)} />
                   <Typography variant="caption" color="text.secondary">{formatDateTime(visit.timestamp || null)}</Typography>
                 </Stack>
                 <Typography variant="body2" mt={0.75}>{visit.feedback || 'Sem observacao registrada.'}</Typography>
@@ -258,8 +259,4 @@ function CustomerDetails({ customer, routesById, usersById }) {
       </Stack>
     </Paper>
   );
-}
-
-function StatusChip({ status }) {
-  return <Chip label={statusLabel(status)} size="small" color={status === 'visited' ? 'success' : status === 'not_visited' ? 'error' : 'primary'} />;
 }

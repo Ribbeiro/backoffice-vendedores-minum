@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Box, CircularProgress } from '@mui/material';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
+import { minumTokens } from '../design/tokens';
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN;
 const SOURCE_ID = 'minum-customers';
@@ -104,10 +105,10 @@ export default function CustomerMap({ customers, selectedCustomerId, onCustomerS
   }
 
   return (
-    <Box position="relative" height={{ xs: 420, lg: 590 }} borderRadius={1} overflow="hidden" bgcolor="#dbeafe">
+    <Box position="relative" height={{ xs: 420, lg: 590 }} borderRadius={1} overflow="hidden" bgcolor={minumTokens.feedbackSurface.info}>
       <Box ref={containerRef} width="100%" height="100%" />
       {!mapLoaded && !mapError && (
-        <Box position="absolute" inset={0} display="grid" sx={{ placeItems: 'center', bgcolor: 'rgba(248, 250, 252, 0.74)' }}>
+        <Box position="absolute" inset={0} display="grid" sx={{ placeItems: 'center', bgcolor: minumTokens.surface.default, opacity: 0.82 }}>
           <CircularProgress />
         </Box>
       )}
@@ -133,12 +134,12 @@ function addOrUpdateCustomerLayer(map, sourceData) {
       'circle-color': [
         'match',
         ['get', 'visitStatus'],
-        'visited', '#009279',
-        'not_visited', '#B9382F',
-        '#5889FB',
+        'visited', minumTokens.feedback.success,
+        'not_visited', minumTokens.feedback.error,
+        minumTokens.feedback.info,
       ],
       'circle-stroke-width': ['case', ['get', 'selected'], 3, 1.5],
-      'circle-stroke-color': ['case', ['get', 'selected'], '#0f172a', '#ffffff'],
+      'circle-stroke-color': ['case', ['get', 'selected'], minumTokens.text.primary, minumTokens.text.inverse],
       'circle-opacity': 0.96,
     },
   });

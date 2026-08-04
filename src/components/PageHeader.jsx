@@ -1,20 +1,16 @@
-import { Box, Typography } from '@mui/material';
+import { Box, Stack, Typography } from '@mui/material';
+import MinumLine from './MinumLine';
 
 export default function PageHeader({ title, subtitle, action }) {
   return (
-    <Box display="flex" alignItems={{ xs: 'flex-start', sm: 'center' }} justifyContent="space-between" gap={2} mb={3} flexDirection={{ xs: 'column', sm: 'row' }}>
+    <Stack direction={{ xs: 'column', sm: 'row' }} alignItems={{ xs: 'flex-start', sm: 'flex-end' }} justifyContent="space-between" gap={2} mb={3.5}>
       <Box>
-        <Typography variant="h4" component="h1">
-          {title}
-        </Typography>
-        {subtitle && (
-          <Typography variant="body1" color="text.secondary" mt={0.5}>
-            {subtitle}
-          </Typography>
-        )}
-        <Box className="minum-brand-line" mt={1.5} />
+        <Typography variant="overline" color="secondary.main">OPERACAO MINUM</Typography>
+        <Typography variant="h4" component="h1" mt={0.25}>{title}</Typography>
+        {subtitle && <Typography variant="body1" color="text.secondary" mt={0.75} maxWidth={720}>{subtitle}</Typography>}
+        <MinumLine sx={{ mt: 1.5 }} />
       </Box>
       {action}
-    </Box>
+    </Stack>
   );
 }

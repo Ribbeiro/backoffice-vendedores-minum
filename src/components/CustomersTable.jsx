@@ -11,6 +11,7 @@ import {
 } from '@mui/material';
 import { useMemo, useState } from 'react';
 import { currencyBRL } from '../utils/formatters';
+import EmptyState from './EmptyState';
 
 export default function CustomersTable({ customers }) {
   const [page, setPage] = useState(0);
@@ -20,6 +21,14 @@ export default function CustomersTable({ customers }) {
     () => customers.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage),
     [customers, page, rowsPerPage],
   );
+
+  if (customers.length === 0) {
+    return (
+      <Paper variant="outlined">
+        <EmptyState title="Nenhum cliente encontrado" description="Ajuste os filtros ou importe uma nova planilha para ampliar a sua base de oportunidades." />
+      </Paper>
+    );
+  }
 
   return (
     <Paper>
@@ -53,13 +62,6 @@ export default function CustomersTable({ customers }) {
                 <TableCell align="right">{currencyBRL(customer.expectedRevenueValue ?? customer.expectedRevenue)}</TableCell>
               </TableRow>
             ))}
-            {visibleRows.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={6} align="center">
-                  Nenhum cliente encontrado.
-                </TableCell>
-              </TableRow>
-            )}
           </TableBody>
         </Table>
       </TableContainer>

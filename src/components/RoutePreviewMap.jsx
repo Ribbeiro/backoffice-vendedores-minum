@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Box, CircularProgress, Typography } from '@mui/material';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
+import { minumTokens } from '../design/tokens';
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN;
 const ROUTE_SOURCE_ID = 'shared-route-preview';
@@ -49,7 +50,7 @@ export default function RoutePreviewMap({ customers, preview, isLoading }) {
         type: 'line',
         source: ROUTE_SOURCE_ID,
         paint: {
-          'line-color': '#009279',
+          'line-color': minumTokens.brand.primary,
           'line-width': 5,
           'line-opacity': 0.9,
         },
@@ -86,21 +87,21 @@ export default function RoutePreviewMap({ customers, preview, isLoading }) {
   }
 
   return (
-    <Box position="relative" height={{ xs: 340, md: 440 }} borderRadius={1} overflow="hidden" bgcolor="#e0f2fe">
+    <Box position="relative" height={{ xs: 340, md: 440 }} borderRadius={1} overflow="hidden" bgcolor={minumTokens.feedbackSurface.info}>
       <Box ref={containerRef} width="100%" height="100%" />
       {!mapLoaded && !mapError && (
-        <Box position="absolute" inset={0} display="grid" sx={{ placeItems: 'center', bgcolor: 'rgba(248, 250, 252, 0.74)' }}>
+        <Box position="absolute" inset={0} display="grid" sx={{ placeItems: 'center', bgcolor: minumTokens.surface.default, opacity: 0.82 }}>
           <CircularProgress />
         </Box>
       )}
       {isLoading && mapLoaded && (
-        <Box position="absolute" top={16} left={16} px={1.5} py={0.75} borderRadius={1} bgcolor="rgba(15, 23, 42, 0.86)" color="common.white" display="flex" alignItems="center" gap={1}>
+        <Box position="absolute" top={16} left={16} px={1.5} py={0.75} borderRadius={1} bgcolor={minumTokens.brand.primaryDark} color={minumTokens.text.inverse} display="flex" alignItems="center" gap={1}>
           <CircularProgress size={16} color="inherit" />
           <Typography variant="caption">Calculando percurso por ruas...</Typography>
         </Box>
       )}
       {!isLoading && customers.length > 1 && !preview?.geometry && mapLoaded && (
-        <Box position="absolute" left={16} bottom={16} px={1.5} py={0.75} borderRadius={1} bgcolor="rgba(255, 255, 255, 0.94)">
+        <Box position="absolute" left={16} bottom={16} px={1.5} py={0.75} borderRadius={1} bgcolor={minumTokens.surface.elevated}>
           <Typography variant="caption">Use &quot;Atualizar mapa&quot; para desenhar o trajeto real.</Typography>
         </Box>
       )}
@@ -120,9 +121,9 @@ function updateMarkers(map, customers, markersRef) {
       'width:30px',
       'height:30px',
       'border-radius:50%',
-      'border:3px solid #ffffff',
-      'box-shadow:0 2px 6px rgba(15,23,42,.35)',
-      'color:#ffffff',
+      `border:3px solid ${minumTokens.text.inverse}`,
+      `box-shadow:${minumTokens.shadow.low}`,
+      `color:${minumTokens.text.inverse}`,
       'font-weight:700',
       'font-size:13px',
       'cursor:default',
@@ -135,9 +136,9 @@ function updateMarkers(map, customers, markersRef) {
 }
 
 function markerColor(index, count) {
-  if (index === 0) return '#16a34a';
-  if (index === count - 1) return '#dc2626';
-  return '#009279';
+  if (index === 0) return minumTokens.feedback.success;
+  if (index === count - 1) return minumTokens.feedback.error;
+  return minumTokens.brand.primary;
 }
 
 function fitMapToCustomers(map, customers) {

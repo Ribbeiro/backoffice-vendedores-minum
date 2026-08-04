@@ -15,6 +15,7 @@ import {
   Typography,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import EmptyState from '../components/EmptyState';
 import PageHeader from '../components/PageHeader';
 import { useData } from '../hooks/useData';
 import { asArray } from '../utils/helpers';
@@ -135,7 +136,7 @@ export default function Historico() {
             </Accordion>
           );
         })}
-        {sortedRoutes.length === 0 && <Typography color="text.secondary">Nenhuma rota encontrada.</Typography>}
+        {sortedRoutes.length === 0 && <EmptyState title="Nenhuma rota encontrada" description="Quando uma rota for planejada no aplicativo, o acompanhamento e os feedbacks aparecerao aqui." />}
       </Stack>
     </>
   );
