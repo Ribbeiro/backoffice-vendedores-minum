@@ -26,10 +26,11 @@ import UploadFileIcon from '@mui/icons-material/UploadFile';
 import AddRoadIcon from '@mui/icons-material/AddRoad';
 import { Alert } from '@mui/material';
 import { useState } from 'react';
+import minumLogo from '../assets/minum-logo.png';
 import { useAuth } from '../hooks/useAuth';
 import { useData } from '../hooks/useData';
 
-const drawerWidth = 248;
+const drawerWidth = 264;
 
 const navItems = [
   { label: 'Dashboard', to: '/dashboard', icon: <DashboardIcon /> },
@@ -54,17 +55,16 @@ export default function Layout() {
   }
 
   const drawer = (
-    <Box height="100%" display="flex" flexDirection="column">
-      <Toolbar>
-        <Box>
-          <Typography variant="h6">Minum</Typography>
-          <Typography variant="body2" color="text.secondary">
-            Backoffice
-          </Typography>
-        </Box>
-      </Toolbar>
+    <Box height="100%" display="flex" flexDirection="column" bgcolor="background.paper">
+      <Box px={3} py={2.5}>
+        <Box component="img" src={minumLogo} alt="Minum" sx={{ width: 132, display: 'block' }} />
+        <Typography variant="body2" color="text.secondary" mt={1}>
+          Backoffice operacional
+        </Typography>
+        <Box className="minum-brand-line" mt={1.25} />
+      </Box>
       <Divider />
-      <List sx={{ px: 1, flex: 1 }}>
+      <List sx={{ px: 1.25, py: 1.5, flex: 1 }}>
         {navItems.map((item) => (
           <ListItemButton
             key={item.to}
@@ -72,8 +72,12 @@ export default function Layout() {
             to={item.to}
             onClick={() => setMobileOpen(false)}
             sx={{
-              borderRadius: 2,
-              mb: 0.5,
+              borderRadius: 1,
+              mb: 0.75,
+              minHeight: 44,
+              color: 'text.secondary',
+              '&:hover': { bgcolor: '#EEF8F5', color: 'primary.main' },
+              '& .MuiListItemIcon-root': { color: 'inherit', minWidth: 38 },
               '&.active': {
                 bgcolor: 'primary.main',
                 color: 'primary.contrastText',
@@ -86,11 +90,14 @@ export default function Layout() {
           </ListItemButton>
         ))}
       </List>
-      <Box p={2}>
-        <Typography variant="body2" color="text.secondary" noWrap>
+      <Box p={2.5} borderTop="1px solid" borderColor="divider">
+        <Typography variant="caption" color="text.secondary" display="block" mb={0.5}>
+          Sessao ativa
+        </Typography>
+        <Typography variant="body2" fontWeight={600} noWrap>
           {profile?.name || profile?.email || 'Administrador'}
         </Typography>
-        <Button startIcon={<LogoutIcon />} fullWidth sx={{ mt: 1 }} onClick={handleLogout}>
+        <Button startIcon={<LogoutIcon />} fullWidth sx={{ mt: 1.25, justifyContent: 'flex-start' }} onClick={handleLogout}>
           Sair
         </Button>
       </Box>
@@ -98,12 +105,12 @@ export default function Layout() {
   );
 
   return (
-    <Box display="flex" minHeight="100vh">
+    <Box display="flex" minHeight="100vh" bgcolor="background.default">
       <AppBar
         position="fixed"
-        color="inherit"
+        color="transparent"
         elevation={0}
-        sx={{ borderBottom: '1px solid #e2e8f0', width: { md: `calc(100% - ${drawerWidth}px)` }, ml: { md: `${drawerWidth}px` } }}
+        sx={{ bgcolor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider', width: { md: `calc(100% - ${drawerWidth}px)` }, ml: { md: `${drawerWidth}px` } }}
       >
         <Toolbar>
           {!isDesktop && (
@@ -113,7 +120,7 @@ export default function Layout() {
               </IconButton>
             </Tooltip>
           )}
-          <Typography variant="h6" color="text.primary">
+          <Typography variant="subtitle1" color="text.primary">
             Painel administrativo
           </Typography>
         </Toolbar>

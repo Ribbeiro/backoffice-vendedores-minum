@@ -12,6 +12,7 @@ export default function PageHeader({ title, subtitle, action }) {
             {subtitle}
           </Typography>
         )}
+        <Box className="minum-brand-line" mt={1.5} />
       </Box>
       {action}
     </Box>

@@ -3,6 +3,7 @@ import { Navigate } from 'react-router-dom';
 import { Alert, Box, Button, Card, CardContent, Stack, TextField, Typography } from '@mui/material';
 import LockIcon from '@mui/icons-material/Lock';
 import { useAuth } from '../hooks/useAuth';
+import minumLogo from '../assets/minum-logo.png';
 
 export default function Login() {
   const { login, loading, error, isAdmin } = useAuth();
@@ -23,14 +24,13 @@ export default function Login() {
   }
 
   return (
-    <Box minHeight="100vh" display="grid" sx={{ placeItems: 'center', background: 'linear-gradient(135deg, #f8fafc 0%, #e0f2fe 100%)', p: 2 }}>
-      <Card sx={{ width: '100%', maxWidth: 420 }}>
-        <CardContent sx={{ p: 4 }}>
+    <Box minHeight="100vh" display="grid" sx={{ placeItems: 'center', bgcolor: 'primary.main', p: 2 }}>
+      <Card sx={{ width: '100%', maxWidth: 440 }}>
+        <CardContent sx={{ p: { xs: 3, sm: 4 }, '&:last-child': { pb: { xs: 3, sm: 4 } } }}>
           <Stack spacing={2.5}>
-            <Stack alignItems="center" spacing={1}>
-              <Box display="grid" sx={{ placeItems: 'center', width: 56, height: 56, borderRadius: 2, bgcolor: 'primary.main', color: 'white' }}>
-                <LockIcon />
-              </Box>
+            <Stack alignItems="center" spacing={1.25}>
+              <Box component="img" src={minumLogo} alt="Minum" sx={{ width: 170, maxWidth: '80%' }} />
+              <Box className="minum-brand-line" />
               <Typography variant="h5">Backoffice Minum</Typography>
               <Typography color="text.secondary" textAlign="center">
                 Entre com uma conta administradora.
@@ -41,7 +41,7 @@ export default function Login() {
               <Stack spacing={2}>
                 <TextField label="Email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} required fullWidth />
                 <TextField label="Senha" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required fullWidth />
-                <Button variant="contained" size="large" type="submit" disabled={loading}>
+                <Button variant="contained" color="secondary" size="large" type="submit" disabled={loading} startIcon={<LockIcon />}>
                   Entrar
                 </Button>
               </Stack>

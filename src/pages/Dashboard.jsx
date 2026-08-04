@@ -60,7 +60,7 @@ export default function Dashboard() {
       {
         label: 'Visitas',
         data: visits.values,
-        backgroundColor: '#155e75',
+        backgroundColor: '#009279',
         borderRadius: 6,
       },
     ],
@@ -93,9 +93,9 @@ export default function Dashboard() {
             </Typography>
           </Box>
           <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-            <MapLegend color="#2563eb" label={`Pendentes ${mapStatusCount.pending || 0}`} />
-            <MapLegend color="#16a34a" label={`Visitados ${mapStatusCount.visited || 0}`} />
-            <MapLegend color="#dc2626" label={`Nao visitados ${mapStatusCount.not_visited || 0}`} />
+            <MapLegend color="#5889FB" label={`Pendentes ${mapStatusCount.pending || 0}`} />
+            <MapLegend color="#009279" label={`Visitados ${mapStatusCount.visited || 0}`} />
+            <MapLegend color="#B9382F" label={`Nao visitados ${mapStatusCount.not_visited || 0}`} />
           </Stack>
         </Stack>
         <Grid container spacing={2}>

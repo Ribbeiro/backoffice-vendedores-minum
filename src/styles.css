@@ -3,6 +3,8 @@
 }
 
 body {
+  background: #f2f4fa;
+  color: #12342f;
   margin: 0;
   min-width: 320px;
 }
@@ -14,7 +16,7 @@ a {
 
 .drop-zone {
   align-items: center;
-  border: 2px dashed #94a3b8;
+  border: 2px dashed #a4e0ce;
   border-radius: 8px;
   cursor: pointer;
   display: flex;
@@ -29,6 +31,12 @@ a {
 
 .drop-zone:hover,
 .drop-zone.is-dragging {
-  background: #ecfeff;
-  border-color: #155e75;
+  background: #effbf7;
+  border-color: #009279;
+}
+
+.minum-brand-line {
+  background: linear-gradient(90deg, #009279 0 34%, #a4e0ce 34% 100%);
+  height: 6px;
+  width: 74px;
 }

@@ -49,7 +49,7 @@ export default function RoutePreviewMap({ customers, preview, isLoading }) {
         type: 'line',
         source: ROUTE_SOURCE_ID,
         paint: {
-          'line-color': '#0f6b78',
+          'line-color': '#009279',
           'line-width': 5,
           'line-opacity': 0.9,
         },
@@ -137,7 +137,7 @@ function updateMarkers(map, customers, markersRef) {
 function markerColor(index, count) {
   if (index === 0) return '#16a34a';
   if (index === count - 1) return '#dc2626';
-  return '#0f6b78';
+  return '#009279';
 }
 
 function fitMapToCustomers(map, customers) {

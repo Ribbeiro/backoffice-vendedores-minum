@@ -133,9 +133,9 @@ function addOrUpdateCustomerLayer(map, sourceData) {
       'circle-color': [
         'match',
         ['get', 'visitStatus'],
-        'visited', '#16a34a',
-        'not_visited', '#dc2626',
-        '#2563eb',
+        'visited', '#009279',
+        'not_visited', '#B9382F',
+        '#5889FB',
       ],
       'circle-stroke-width': ['case', ['get', 'selected'], 3, 1.5],
       'circle-stroke-color': ['case', ['get', 'selected'], '#0f172a', '#ffffff'],
