@@ -9,6 +9,7 @@ const initialState = {
   customersMap: {},
   routesMap: {},
   routeStopsMap: {},
+  visitEventsMap: {},
   usersMap: {},
   loading: true,
   error: null,
@@ -47,6 +48,7 @@ export function DataProvider({ children }) {
       subscribeCollection('customers', 'customersMap'),
       subscribeCollection('plannedRoutes', 'routesMap'),
       subscribeCollection('plannedRouteStops', 'routeStopsMap'),
+      subscribeCollection('visitEvents', 'visitEventsMap'),
       subscribeCollection('users', 'usersMap'),
     ];
 
@@ -65,6 +67,7 @@ export function DataProvider({ children }) {
       customers,
       routes,
       routeStops: state.routeStopsMap,
+      visitEvents: state.visitEventsMap,
       users,
       sellers,
       admins,

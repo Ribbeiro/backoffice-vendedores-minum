@@ -40,7 +40,16 @@ const statusLabel = (status) => ({
   not_visited: 'Nao visitado',
 }[String(status || '').toLowerCase()] || status || 'Pendente');
 
-const feedbackText = (stop) => stop.feedback || stop.visitFeedback || stop.feedbackText || stop.observation || stop.notes || '-';
+const feedbackText = (stop) => {
+  const feedback = stop.feedback || stop.visitFeedback || stop.feedbackText || stop.observation || stop.notes || '-';
+  const details = [
+    stop.notVisitedReason && `Motivo: ${stop.notVisitedReason}`,
+    stop.commercialOutcome && `Resultado: ${stop.commercialOutcome}`,
+    stop.nextAction && `Proximo passo: ${stop.nextAction}${stop.nextActionDueDate ? ` (${stop.nextActionDueDate})` : ''}`,
+  ].filter(Boolean);
+
+  return [feedback, ...details].join('\n');
+};
 
 const feedbackDateTime = (stop) => stop.feedbackAt || stop.visitedAt || stop.visitAt || stop.arrivalTime || stop.horario || stop.timestamp;
 
@@ -121,7 +130,7 @@ export default function Historico() {
                             <TableCell>{stop.customerName || stop.clienteNome || stop.name || stop.customerId || '-'}</TableCell>
                             <TableCell>{formatDateTime(feedbackDateTime(stop))}</TableCell>
                             <TableCell><DistanceCell distance={distance} /></TableCell>
-                            <TableCell sx={{ minWidth: 240 }}>{feedbackText(stop)}</TableCell>
+                            <TableCell sx={{ minWidth: 240, whiteSpace: 'pre-line' }}>{feedbackText(stop)}</TableCell>
                             <TableCell>{statusLabel(stop.status || stop.result)}</TableCell>
                           </TableRow>
                         );

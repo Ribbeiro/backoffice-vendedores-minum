@@ -24,6 +24,7 @@ import AddRoadIcon from '@mui/icons-material/AddRoad';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import GroupIcon from '@mui/icons-material/Group';
 import HistoryIcon from '@mui/icons-material/History';
+import InsightsIcon from '@mui/icons-material/Insights';
 import LogoutIcon from '@mui/icons-material/Logout';
 import MenuIcon from '@mui/icons-material/Menu';
 import PeopleAltIcon from '@mui/icons-material/PeopleAlt';
@@ -43,6 +44,7 @@ const navItems = [
   { label: 'Upload', to: '/upload', icon: <UploadFileIcon /> },
   { label: 'Criar rota', to: '/criar-rota', icon: <AddRoadIcon /> },
   { label: 'Historico', to: '/historico', icon: <HistoryIcon /> },
+  { label: 'Inteligencia', to: '/inteligencia', icon: <InsightsIcon /> },
   { label: 'Vendedores', to: '/vendedores', icon: <GroupIcon /> },
   { label: 'Criar usuarios', to: '/usuarios', icon: <PersonAddAlt1Icon /> },
 ];

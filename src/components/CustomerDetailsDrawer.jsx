@@ -164,6 +164,9 @@ function DetailRow({ label, value, type }) {
 function VisitFeedback({ visit, route, user }) {
   const seller = user?.name || user?.displayName || user?.email || route?.sellerName || route?.vendedorNome || 'Vendedor nao identificado';
   const feedback = visit.feedback || visit.visitFeedback || visit.feedbackText || visit.observation || visit.notes || 'Sem observacao registrada.';
+  const reason = visit.notVisitedReason;
+  const outcome = visit.commercialOutcome;
+  const nextAction = visit.nextAction;
 
   return (
     <Box sx={{ borderLeft: '3px solid', borderColor: visit.status === 'visited' ? 'success.main' : 'error.main', pl: 1.25 }}>
@@ -172,6 +175,13 @@ function VisitFeedback({ visit, route, user }) {
         <Typography variant="caption" color="text.secondary">{formatDateTime(visit.timestamp)}</Typography>
       </Stack>
       <Typography variant="body2" mt={0.75}>{feedback}</Typography>
+      {reason && <Typography variant="body2" color="text.secondary" mt={0.5}>Motivo: {reason}</Typography>}
+      {outcome && <Typography variant="body2" color="text.secondary" mt={0.5}>Resultado: {outcome}</Typography>}
+      {nextAction && (
+        <Typography variant="body2" color="primary.main" mt={0.5}>
+          Proximo passo: {nextAction}{visit.nextActionDueDate ? ` ate ${visit.nextActionDueDate}` : ''}
+        </Typography>
+      )}
       <Typography variant="caption" color="text.secondary" display="block" mt={0.75}>{seller}</Typography>
     </Box>
   );

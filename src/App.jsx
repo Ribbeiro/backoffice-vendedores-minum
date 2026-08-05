@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard.jsx';
 import Clientes from './pages/Clientes.jsx';
 import CriarRota from './pages/CriarRota.jsx';
 import Historico from './pages/Historico.jsx';
+import Inteligencia from './pages/Inteligencia.jsx';
 import Login from './pages/Login.jsx';
 import Upload from './pages/Upload.jsx';
 import Usuarios from './pages/Usuarios.jsx';
@@ -30,6 +31,7 @@ export default function App() {
           <Route path="criar-rota" element={<CriarRota />} />
           <Route path="upload" element={<Upload />} />
           <Route path="historico" element={<Historico />} />
+          <Route path="inteligencia" element={<Inteligencia />} />
           <Route path="vendedores" element={<Vendedores />} />
           <Route path="usuarios" element={<Usuarios />} />
         </Route>
