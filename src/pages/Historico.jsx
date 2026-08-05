@@ -23,7 +23,6 @@ import { asArray } from '../utils/helpers';
 import { formatDate, formatDateTime } from '../utils/formatters';
 import {
   buildCustomerLookup,
-  coordinatesFromFeedback,
   distanceAssessment,
   feedbackDistanceFromCustomer,
   formatDistanceMeters,
@@ -40,11 +39,6 @@ const statusLabel = (status) => ({
   visited: 'Visitado',
   not_visited: 'Nao visitado',
 }[String(status || '').toLowerCase()] || status || 'Pendente');
-
-const feedbackLocation = (stop) => {
-  const coordinates = coordinatesFromFeedback(stop);
-  return coordinates ? `${coordinates.latitude.toFixed(5)}, ${coordinates.longitude.toFixed(5)}` : '-';
-};
 
 const feedbackText = (stop) => stop.feedback || stop.visitFeedback || stop.feedbackText || stop.observation || stop.notes || '-';
 
@@ -113,7 +107,6 @@ export default function Historico() {
                         <TableCell>Ordem</TableCell>
                         <TableCell>Cliente</TableCell>
                         <TableCell>Data e horario</TableCell>
-                        <TableCell>Localizacao no momento</TableCell>
                         <TableCell>Distancia do cliente</TableCell>
                         <TableCell>Feedback</TableCell>
                         <TableCell>Status</TableCell>
@@ -127,7 +120,6 @@ export default function Historico() {
                             <TableCell>{stop.order ?? stop.ordem ?? index + 1}</TableCell>
                             <TableCell>{stop.customerName || stop.clienteNome || stop.name || stop.customerId || '-'}</TableCell>
                             <TableCell>{formatDateTime(feedbackDateTime(stop))}</TableCell>
-                            <TableCell>{feedbackLocation(stop)}</TableCell>
                             <TableCell><DistanceCell distance={distance} /></TableCell>
                             <TableCell sx={{ minWidth: 240 }}>{feedbackText(stop)}</TableCell>
                             <TableCell>{statusLabel(stop.status || stop.result)}</TableCell>
