@@ -12,6 +12,7 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -20,6 +21,13 @@ import PageHeader from '../components/PageHeader';
 import { useData } from '../hooks/useData';
 import { asArray } from '../utils/helpers';
 import { formatDate, formatDateTime } from '../utils/formatters';
+import {
+  buildCustomerLookup,
+  coordinatesFromFeedback,
+  distanceAssessment,
+  feedbackDistanceFromCustomer,
+  formatDistanceMeters,
+} from '../utils/locationDistance';
 
 const statusLabel = (status) => ({
   planned: 'Planejada',
@@ -34,10 +42,8 @@ const statusLabel = (status) => ({
 }[String(status || '').toLowerCase()] || status || 'Pendente');
 
 const feedbackLocation = (stop) => {
-  const latitude = stop.feedbackLocation?.latitude ?? stop.feedbackLatitude ?? stop.visitLocation?.latitude;
-  const longitude = stop.feedbackLocation?.longitude ?? stop.feedbackLongitude ?? stop.visitLocation?.longitude;
-  if (latitude === undefined || latitude === null || longitude === undefined || longitude === null) return '-';
-  return `${Number(latitude).toFixed(5)}, ${Number(longitude).toFixed(5)}`;
+  const coordinates = coordinatesFromFeedback(stop);
+  return coordinates ? `${coordinates.latitude.toFixed(5)}, ${coordinates.longitude.toFixed(5)}` : '-';
 };
 
 const feedbackText = (stop) => stop.feedback || stop.visitFeedback || stop.feedbackText || stop.observation || stop.notes || '-';
@@ -45,8 +51,9 @@ const feedbackText = (stop) => stop.feedback || stop.visitFeedback || stop.feedb
 const feedbackDateTime = (stop) => stop.feedbackAt || stop.visitedAt || stop.visitAt || stop.arrivalTime || stop.horario || stop.timestamp;
 
 export default function Historico() {
-  const { routes, routeStops, users } = useData();
+  const { customers, routes, routeStops, users } = useData();
   const usersById = useMemo(() => Object.fromEntries(users.map((user) => [user.id, user])), [users]);
+  const customersByKey = useMemo(() => buildCustomerLookup(customers), [customers]);
   const sortedRoutes = useMemo(
     () => [...routes].sort((a, b) => Number(b.createdAt || b.createdAtTimestamp || 0) - Number(a.createdAt || a.createdAtTimestamp || 0)),
     [routes],
@@ -107,21 +114,26 @@ export default function Historico() {
                         <TableCell>Cliente</TableCell>
                         <TableCell>Data e horario</TableCell>
                         <TableCell>Localizacao no momento</TableCell>
+                        <TableCell>Distancia do cliente</TableCell>
                         <TableCell>Feedback</TableCell>
                         <TableCell>Status</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {stops.map((stop, index) => (
-                        <TableRow key={stop.id}>
-                          <TableCell>{stop.order ?? stop.ordem ?? index + 1}</TableCell>
-                          <TableCell>{stop.customerName || stop.clienteNome || stop.name || stop.customerId || '-'}</TableCell>
-                          <TableCell>{formatDateTime(feedbackDateTime(stop))}</TableCell>
-                          <TableCell>{feedbackLocation(stop)}</TableCell>
-                          <TableCell sx={{ minWidth: 240 }}>{feedbackText(stop)}</TableCell>
-                          <TableCell>{statusLabel(stop.status || stop.result)}</TableCell>
-                        </TableRow>
-                      ))}
+                      {stops.map((stop, index) => {
+                        const distance = feedbackDistanceFromCustomer(stop, customersByKey);
+                        return (
+                          <TableRow key={stop.id}>
+                            <TableCell>{stop.order ?? stop.ordem ?? index + 1}</TableCell>
+                            <TableCell>{stop.customerName || stop.clienteNome || stop.name || stop.customerId || '-'}</TableCell>
+                            <TableCell>{formatDateTime(feedbackDateTime(stop))}</TableCell>
+                            <TableCell>{feedbackLocation(stop)}</TableCell>
+                            <TableCell><DistanceCell distance={distance} /></TableCell>
+                            <TableCell sx={{ minWidth: 240 }}>{feedbackText(stop)}</TableCell>
+                            <TableCell>{statusLabel(stop.status || stop.result)}</TableCell>
+                          </TableRow>
+                        );
+                      })}
                       {stops.length === 0 && (
                         <TableRow>
                           <TableCell colSpan={7} align="center">
@@ -139,5 +151,21 @@ export default function Historico() {
         {sortedRoutes.length === 0 && <EmptyState title="Nenhuma rota encontrada" description="Quando uma rota for planejada no aplicativo, o acompanhamento e os feedbacks aparecerao aqui." />}
       </Stack>
     </>
+  );
+}
+
+function DistanceCell({ distance }) {
+  if (!Number.isFinite(distance.meters)) {
+    return <Typography variant="body2" color="text.secondary">{distance.reason}</Typography>;
+  }
+
+  const assessment = distanceAssessment(distance.meters);
+  return (
+    <Tooltip title={`Distancia GPS em linha reta usando a posicao salva no feedback e a coordenada da ${distance.targetSource}.`}>
+      <Stack spacing={0.25} alignItems="flex-start" sx={{ minWidth: 132 }}>
+        <Chip label={formatDistanceMeters(distance.meters)} size="small" color={assessment.color} />
+        <Typography variant="caption" color="text.secondary">{assessment.label}</Typography>
+      </Stack>
+    </Tooltip>
   );
 }
