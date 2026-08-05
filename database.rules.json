@@ -68,10 +68,51 @@
               "feedbackLocation": {
                 ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.hasChildren(['latitude', 'longitude'])"
               },
+              "feedbackAccuracyMeters": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && (!newData.exists() || newData.isNumber())"
+              },
+              "feedbackDistanceToCustomerMeters": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.isNumber()"
+              },
+              "notVisitedReason": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && (!newData.exists() || newData.isString())"
+              },
+              "commercialOutcome": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && (!newData.exists() || newData.isString())"
+              },
+              "nextAction": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && (!newData.exists() || newData.isString())"
+              },
+              "nextActionDueDate": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && (!newData.exists() || newData.isString())"
+              },
+              "checkInAt": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.isNumber()"
+              },
+              "checkInLocation": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.hasChildren(['latitude', 'longitude'])"
+              },
+              "checkInDistanceToCustomerMeters": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.isNumber()"
+              },
+              "checkOutAt": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && (!newData.exists() || newData.isNumber())"
+              },
               "updatedAt": {
                 ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.isNumber()"
               }
             }
+          }
+        }
+      }
+    },
+    "visitEvents": {
+      ".read": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'",
+      "$routeId": {
+        "$stopId": {
+          "$eventId": {
+            ".write": "auth != null && root.child('users').child(auth.uid).child('active').val() === true && root.child('users').child(auth.uid).child('deleted').val() !== true && !data.exists() && newData.child('sellerUid').val() === auth.uid",
+            ".validate": "newData.hasChildren(['id', 'routeId', 'stopId', 'sellerUid', 'eventType', 'location', 'createdAt']) && newData.child('id').val() === $eventId && newData.child('routeId').val() === $routeId && newData.child('stopId').val() === $stopId && newData.child('sellerUid').val() === auth.uid && (newData.child('eventType').val() === 'check_in' || newData.child('eventType').val() === 'feedback_submitted' || newData.child('eventType').val() === 'check_out') && newData.child('location').hasChildren(['latitude', 'longitude']) && newData.child('location').child('latitude').isNumber() && newData.child('location').child('longitude').isNumber() && newData.child('createdAt').isNumber()"
           }
         }
       }
