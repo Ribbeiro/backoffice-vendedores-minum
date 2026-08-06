@@ -25,6 +25,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import EmptyState from '../components/EmptyState';
 import PageHeader from '../components/PageHeader';
+import { minumTokens } from '../design/tokens';
 import { useData } from '../hooks/useData';
 import { deleteRoute } from '../services/api';
 import { asArray } from '../utils/helpers';
@@ -35,6 +36,14 @@ import {
   feedbackDistanceFromCustomer,
   formatDistanceMeters,
 } from '../utils/locationDistance';
+import {
+  buildRouteTelemetry,
+  formatTelemetryDistance,
+  formatTelemetryDuration,
+  formatTelemetryVariance,
+  stopVisitDurationSeconds,
+  telemetryVarianceColor,
+} from '../utils/routeTelemetry';
 
 const statusLabel = (status) => ({
   planned: 'Planejada',
@@ -62,7 +71,7 @@ const feedbackText = (stop) => {
 const feedbackDateTime = (stop) => stop.feedbackAt || stop.visitedAt || stop.visitAt || stop.arrivalTime || stop.horario || stop.timestamp;
 
 export default function Historico() {
-  const { customers, routes, routeStops, users } = useData();
+  const { customers, routes, routeStops, users, visitEvents } = useData();
   const [routePendingDelete, setRoutePendingDelete] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [actionError, setActionError] = useState(null);
@@ -71,6 +80,10 @@ export default function Historico() {
   const sortedRoutes = useMemo(
     () => [...routes].sort((a, b) => Number(b.createdAt || b.createdAtTimestamp || 0) - Number(a.createdAt || a.createdAtTimestamp || 0)),
     [routes],
+  );
+  const telemetryByRoute = useMemo(
+    () => new Map(buildRouteTelemetry(routes, routeStops, visitEvents).map((item) => [String(item.routeId), item])),
+    [routes, routeStops, visitEvents],
   );
 
   async function handleDeleteRoute() {
@@ -100,6 +113,7 @@ export default function Historico() {
           const visitedStops = stops.filter((stop) => String(stop.status || stop.result || '').toLowerCase() === 'visited');
           const completionPercent = stops.length ? Math.round((visitedStops.length / stops.length) * 100) : 0;
           const isSharedAssignment = route.assignmentType === 'shared' || route.source === 'admin_assignment';
+          const telemetry = telemetryByRoute.get(String(route.id));
 
           return (
             <Accordion key={route.id} disableGutters>
@@ -147,13 +161,16 @@ export default function Historico() {
                     {route.assignmentNotes && <Typography variant="body2">Orientacoes: {route.assignmentNotes}</Typography>}
                   </Stack>
                 )}
+                {telemetry?.hasTelemetry && <TelemetrySummary telemetry={telemetry} />}
                 <TableContainer component={Paper} variant="outlined">
                   <Table size="small">
                     <TableHead>
                       <TableRow>
                         <TableCell>Ordem</TableCell>
                         <TableCell>Cliente</TableCell>
+                        <TableCell>Chegada</TableCell>
                         <TableCell>Data e horario</TableCell>
+                        <TableCell>Permanencia</TableCell>
                         <TableCell>Distancia do cliente</TableCell>
                         <TableCell>Feedback</TableCell>
                         <TableCell>Status</TableCell>
@@ -166,7 +183,9 @@ export default function Historico() {
                           <TableRow key={stop.id}>
                             <TableCell>{stop.order ?? stop.ordem ?? index + 1}</TableCell>
                             <TableCell>{stop.customerName || stop.clienteNome || stop.name || stop.customerId || '-'}</TableCell>
+                            <TableCell>{formatDateTime(stop.arrivedAt || stop.arrivedAtClient)}</TableCell>
                             <TableCell>{formatDateTime(feedbackDateTime(stop))}</TableCell>
+                            <TableCell>{formatTelemetryDuration(stopVisitDurationSeconds(stop))}</TableCell>
                             <TableCell><DistanceCell distance={distance} /></TableCell>
                             <TableCell sx={{ minWidth: 240, whiteSpace: 'pre-line' }}>{feedbackText(stop)}</TableCell>
                             <TableCell>{statusLabel(stop.status || stop.result)}</TableCell>
@@ -175,7 +194,7 @@ export default function Historico() {
                       })}
                       {stops.length === 0 && (
                         <TableRow>
-                          <TableCell colSpan={7} align="center">
+                          <TableCell colSpan={8} align="center">
                             Nenhuma parada encontrada.
                           </TableCell>
                         </TableRow>
@@ -202,6 +221,34 @@ export default function Historico() {
         </DialogActions>
       </Dialog>
     </>
+  );
+}
+
+function TelemetrySummary({ telemetry }) {
+  return (
+    <Paper variant="outlined" sx={{ p: 1.75, mb: 2, bgcolor: minumTokens.surface.subtle }}>
+      <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" spacing={1.5} alignItems={{ md: 'center' }}>
+        <Stack spacing={0.45}>
+          <Typography variant="subtitle2">Execucao registrada pelo GPS</Typography>
+          <Typography variant="body2" color="text.secondary">
+            Inicio: {formatDateTime(telemetry.startedAt)} | Encerramento: {formatDateTime(telemetry.finishedAt)} | {telemetry.locationSampleCount || 0} amostras
+          </Typography>
+        </Stack>
+        <Stack direction="row" spacing={0.75} flexWrap="wrap">
+          <Chip label={`Percorrido ${formatTelemetryDistance(telemetry.actualDistanceMeters)}`} size="small" color="success" />
+          <Chip label={`Rota ${formatTelemetryDistance(telemetry.plannedDistanceMeters)}`} size="small" variant="outlined" />
+          <Chip
+            label={formatTelemetryVariance(telemetry.distanceVariancePercent)}
+            size="small"
+            color={telemetryVarianceColor(telemetry.distanceVariancePercent)}
+            variant="outlined"
+          />
+          <Chip label={`Em rota ${formatTelemetryDuration(telemetry.actualDurationSeconds)}`} size="small" color="info" variant="outlined" />
+          <Chip label={`Parado ${formatTelemetryDuration(telemetry.stoppedDurationSeconds)}`} size="small" variant="outlined" />
+          <Chip label={`Media por parada ${formatTelemetryDuration(telemetry.averageVisitDurationSeconds)}`} size="small" variant="outlined" />
+        </Stack>
+      </Stack>
+    </Paper>
   );
 }
 
