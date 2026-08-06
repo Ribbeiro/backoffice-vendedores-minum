@@ -25,6 +25,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import EmptyState from '../components/EmptyState';
 import PageHeader from '../components/PageHeader';
+import RouteReportPanel from '../components/RouteReportPanel';
 import { minumTokens } from '../design/tokens';
 import { useData } from '../hooks/useData';
 import { deleteRoute } from '../services/api';
@@ -104,6 +105,13 @@ export default function Historico() {
     <>
       <PageHeader title="Historico de rotas" subtitle="Rotas e paradas gravadas pelo aplicativo Android." />
       {actionError && <Alert severity="error" sx={{ mb: 2 }}>{actionError}</Alert>}
+      <RouteReportPanel
+        customers={customers}
+        routes={routes}
+        routeStops={routeStops}
+        users={users}
+        visitEvents={visitEvents}
+      />
       <Stack spacing={1.5}>
         {sortedRoutes.map((route) => {
           const sellerUid = route.sellerUid || route.vendedor || route.uid;
