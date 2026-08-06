@@ -29,7 +29,7 @@ import {
   formatGpsDistance,
 } from '../utils/visitEvents';
 
-export default function Inteligencia() {
+export function OperationalIntelligence({ embedded = false }) {
   const { visitEvents } = useData();
   const events = useMemo(() => flattenVisitEvents(visitEvents), [visitEvents]);
   const feedbacks = useMemo(() => feedbackEvents(events), [events]);
@@ -49,10 +49,20 @@ export default function Inteligencia() {
 
   return (
     <>
-      <PageHeader
-        title="Inteligencia operacional"
-        subtitle="Leitura consolidada de visitas, retornos comerciais e qualidade do registro em campo."
-      />
+      {!embedded && (
+        <PageHeader
+          title="Inteligencia operacional"
+          subtitle="Leitura consolidada de visitas, retornos comerciais e qualidade do registro em campo."
+        />
+      )}
+      {embedded && (
+        <Box mb={2.25}>
+          <Typography variant="h6">Inteligencia operacional</Typography>
+          <Typography variant="body2" color="text.secondary" mt={0.5}>
+            Visitas, retornos comerciais e qualidade dos registros feitos em campo.
+          </Typography>
+        </Box>
+      )}
       <Grid container spacing={2} mb={3}>
         <Grid item xs={12} sm={6} lg={3}>
           <MetricCard label="Feedbacks registrados" value={feedbacks.length} icon={FactCheckOutlinedIcon} />
@@ -185,4 +195,8 @@ function isOverdue(value) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   return date < today;
+}
+
+export default function Inteligencia() {
+  return <OperationalIntelligence />;
 }

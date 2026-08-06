@@ -1,9 +1,18 @@
 import { useMemo, useState } from 'react';
+import {
+  Alert,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+} from '@mui/material';
 import CustomerFilters from '../components/CustomerFilters';
 import CustomerDetailsDrawer from '../components/CustomerDetailsDrawer';
 import CustomersTable from '../components/CustomersTable';
 import PageHeader from '../components/PageHeader';
 import { useData } from '../hooks/useData';
+import { deleteCustomer } from '../services/api';
 import { buildCustomerVisitIndex, visitsForCustomer } from '../utils/customerVisits';
 
 const emptyFilters = {
@@ -17,6 +26,9 @@ export default function Clientes() {
   const { customers, routeStops, routes, users } = useData();
   const [filters, setFilters] = useState(emptyFilters);
   const [selectedCustomerId, setSelectedCustomerId] = useState(null);
+  const [customerPendingDelete, setCustomerPendingDelete] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [actionError, setActionError] = useState(null);
 
   const segments = useMemo(() => unique(customers.map((customer) => customer.segment)), [customers]);
   const statuses = useMemo(() => unique(customers.map((customer) => customer.pipelineStage)), [customers]);
@@ -36,9 +48,25 @@ export default function Clientes() {
   const usersById = useMemo(() => new Map(users.map((user) => [String(user.id), user])), [users]);
   const selectedCustomer = selectedCustomerId ? customersById.get(String(selectedCustomerId)) : null;
 
+  async function handleDeleteCustomer() {
+    if (!customerPendingDelete) return;
+    setIsDeleting(true);
+    setActionError(null);
+    try {
+      await deleteCustomer(customerPendingDelete.id);
+      setCustomerPendingDelete(null);
+      setSelectedCustomerId(null);
+    } catch (error) {
+      setActionError(error.message || 'Nao foi possivel excluir o cliente agora.');
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
   return (
     <>
       <PageHeader title="Clientes" subtitle="Base compartilhada com o app Android. Clique em um cliente para consultar todos os dados e feedbacks." />
+      {actionError && <Alert severity="error" sx={{ mb: 2 }}>{actionError}</Alert>}
       <CustomerFilters filters={filters} onChange={setFilters} segments={segments} statuses={statuses} />
       <CustomersTable
         customers={filteredCustomers}
@@ -52,7 +80,22 @@ export default function Clientes() {
         visits={selectedCustomer ? visitsForCustomer(selectedCustomer, customerVisits) : []}
         routesById={routesById}
         usersById={usersById}
+        onDelete={() => setCustomerPendingDelete(selectedCustomer)}
+        isDeleting={isDeleting}
       />
+
+      <Dialog open={Boolean(customerPendingDelete)} onClose={() => !isDeleting && setCustomerPendingDelete(null)}>
+        <DialogTitle>Excluir cliente da base?</DialogTitle>
+        <DialogContent>
+          O cadastro de {customerPendingDelete?.name || customerPendingDelete?.clientName || 'este cliente'} deixara de aparecer no app e no backoffice. O historico de visitas ja realizado sera preservado para auditoria.
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCustomerPendingDelete(null)} disabled={isDeleting}>Cancelar</Button>
+          <Button color="error" variant="contained" onClick={handleDeleteCustomer} disabled={isDeleting}>
+            {isDeleting ? 'Excluindo...' : 'Excluir cliente'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 }

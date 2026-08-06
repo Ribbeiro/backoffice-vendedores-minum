@@ -12,11 +12,15 @@
       ".write": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'"
     },
     "plannedRoutes": {
-      ".read": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'",
+      ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'admin' || (root.child('users').child(auth.uid).child('active').val() === true && root.child('users').child(auth.uid).child('deleted').val() !== true && query.orderByChild === 'sellerUid' && query.equalTo === auth.uid))",
+      ".indexOn": ["sellerUid"],
       ".write": "auth != null && root.child('users').child(auth.uid).child('active').val() === true && root.child('users').child(auth.uid).child('deleted').val() !== true"
     },
     "plannedRouteStops": {
       ".read": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'",
+      "$routeId": {
+        ".read": "auth != null && root.child('users').child(auth.uid).child('active').val() === true && root.child('users').child(auth.uid).child('deleted').val() !== true && root.child('plannedRoutes').child($routeId).child('sellerUid').val() === auth.uid"
+      },
       ".write": "auth != null && root.child('users').child(auth.uid).child('active').val() === true && root.child('users').child(auth.uid).child('deleted').val() !== true"
     },
     "sharedRoutesBySeller": {
@@ -109,6 +113,7 @@
     "visitEvents": {
       ".read": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'",
       "$routeId": {
+        ".write": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'",
         "$stopId": {
           "$eventId": {
             ".write": "auth != null && root.child('users').child(auth.uid).child('active').val() === true && root.child('users').child(auth.uid).child('deleted').val() !== true && !data.exists() && newData.child('sellerUid').val() === auth.uid",

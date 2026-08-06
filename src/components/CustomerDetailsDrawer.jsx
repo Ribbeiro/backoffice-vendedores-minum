@@ -1,4 +1,5 @@
 import CloseIcon from '@mui/icons-material/Close';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import PhoneOutlinedIcon from '@mui/icons-material/PhoneOutlined';
 import {
   Box,
@@ -56,7 +57,16 @@ const FIELD_GROUPS = [
 
 const KNOWN_FIELDS = new Set(FIELD_GROUPS.flatMap(({ fields }) => fields.flatMap(({ keys }) => keys)));
 
-export default function CustomerDetailsDrawer({ customer, open, onClose, visits = [], routesById, usersById }) {
+export default function CustomerDetailsDrawer({
+  customer,
+  open,
+  onClose,
+  visits = [],
+  routesById,
+  usersById,
+  onDelete,
+  isDeleting = false,
+}) {
   if (!customer) return null;
 
   const details = FIELD_GROUPS.map((group) => ({
@@ -144,6 +154,21 @@ export default function CustomerDetailsDrawer({ customer, open, onClose, visits 
             ))}
           </Stack>
         </Box>
+
+        {onDelete && (
+          <Box sx={{ pt: 1 }}>
+            <Divider sx={{ mb: 2 }} />
+            <Button
+              color="error"
+              variant="text"
+              startIcon={<DeleteOutlineIcon />}
+              disabled={isDeleting}
+              onClick={onDelete}
+            >
+              Excluir cliente da base
+            </Button>
+          </Box>
+        )}
       </Stack>
     </Drawer>
   );

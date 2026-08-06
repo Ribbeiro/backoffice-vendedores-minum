@@ -1,9 +1,15 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
+  Alert,
   Accordion,
   AccordionDetails,
   AccordionSummary,
   Chip,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Paper,
   Stack,
   Table,
@@ -15,10 +21,12 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import EmptyState from '../components/EmptyState';
 import PageHeader from '../components/PageHeader';
 import { useData } from '../hooks/useData';
+import { deleteRoute } from '../services/api';
 import { asArray } from '../utils/helpers';
 import { formatDate, formatDateTime } from '../utils/formatters';
 import {
@@ -55,6 +63,9 @@ const feedbackDateTime = (stop) => stop.feedbackAt || stop.visitedAt || stop.vis
 
 export default function Historico() {
   const { customers, routes, routeStops, users } = useData();
+  const [routePendingDelete, setRoutePendingDelete] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [actionError, setActionError] = useState(null);
   const usersById = useMemo(() => Object.fromEntries(users.map((user) => [user.id, user])), [users]);
   const customersByKey = useMemo(() => buildCustomerLookup(customers), [customers]);
   const sortedRoutes = useMemo(
@@ -62,9 +73,24 @@ export default function Historico() {
     [routes],
   );
 
+  async function handleDeleteRoute() {
+    if (!routePendingDelete) return;
+    setIsDeleting(true);
+    setActionError(null);
+    try {
+      await deleteRoute(routePendingDelete);
+      setRoutePendingDelete(null);
+    } catch (error) {
+      setActionError(error.message || 'Nao foi possivel excluir a rota agora.');
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
   return (
     <>
       <PageHeader title="Historico de rotas" subtitle="Rotas e paradas gravadas pelo aplicativo Android." />
+      {actionError && <Alert severity="error" sx={{ mb: 2 }}>{actionError}</Alert>}
       <Stack spacing={1.5}>
         {sortedRoutes.map((route) => {
           const sellerUid = route.sellerUid || route.vendedor || route.uid;
@@ -86,6 +112,18 @@ export default function Historico() {
                     <Chip label={statusLabel(route.status)} size="small" color={route.status === 'completed' || route.status === 'concluida' ? 'success' : 'default'} />
                     <Chip label={`${stops.length} paradas`} size="small" color="primary" />
                     {isSharedAssignment && <Chip label="Atribuida" size="small" color="secondary" />}
+                    <Button
+                      size="small"
+                      color="error"
+                      startIcon={<DeleteOutlineIcon fontSize="small" />}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setRoutePendingDelete(route);
+                      }}
+                    >
+                      Excluir
+                    </Button>
                   </Stack>
                 </Stack>
               </AccordionSummary>
@@ -151,6 +189,18 @@ export default function Historico() {
         })}
         {sortedRoutes.length === 0 && <EmptyState title="Nenhuma rota encontrada" description="Quando uma rota for planejada no aplicativo, o acompanhamento e os feedbacks aparecerao aqui." />}
       </Stack>
+      <Dialog open={Boolean(routePendingDelete)} onClose={() => !isDeleting && setRoutePendingDelete(null)}>
+        <DialogTitle>Excluir rota permanentemente?</DialogTitle>
+        <DialogContent>
+          A rota, todas as paradas, a copia enviada ao vendedor e os eventos de visita associados serao removidos do Firebase. Esta acao nao pode ser desfeita.
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRoutePendingDelete(null)} disabled={isDeleting}>Cancelar</Button>
+          <Button color="error" variant="contained" onClick={handleDeleteRoute} disabled={isDeleting}>
+            {isDeleting ? 'Excluindo...' : 'Excluir rota'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 }

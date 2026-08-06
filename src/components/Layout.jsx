@@ -13,6 +13,7 @@ import {
   ListItemButton,
   ListItemIcon,
   ListItemText,
+  ListSubheader,
   Stack,
   Toolbar,
   Tooltip,
@@ -24,7 +25,6 @@ import AddRoadIcon from '@mui/icons-material/AddRoad';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import GroupIcon from '@mui/icons-material/Group';
 import HistoryIcon from '@mui/icons-material/History';
-import InsightsIcon from '@mui/icons-material/Insights';
 import LogoutIcon from '@mui/icons-material/Logout';
 import MenuIcon from '@mui/icons-material/Menu';
 import PeopleAltIcon from '@mui/icons-material/PeopleAlt';
@@ -38,15 +38,30 @@ import { useData } from '../hooks/useData';
 
 const drawerWidth = 272;
 
-const navItems = [
-  { label: 'Dashboard', to: '/dashboard', icon: <DashboardIcon /> },
-  { label: 'Clientes', to: '/clientes', icon: <PeopleAltIcon /> },
-  { label: 'Upload', to: '/upload', icon: <UploadFileIcon /> },
-  { label: 'Criar rota', to: '/criar-rota', icon: <AddRoadIcon /> },
-  { label: 'Historico', to: '/historico', icon: <HistoryIcon /> },
-  { label: 'Inteligencia', to: '/inteligencia', icon: <InsightsIcon /> },
-  { label: 'Vendedores', to: '/vendedores', icon: <GroupIcon /> },
-  { label: 'Criar usuarios', to: '/usuarios', icon: <PersonAddAlt1Icon /> },
+const navigationGroups = [
+  {
+    label: 'Visao geral',
+    items: [{ label: 'Dashboard', to: '/dashboard', icon: <DashboardIcon /> }],
+  },
+  {
+    label: 'Operacao',
+    items: [
+      { label: 'Clientes', to: '/clientes', icon: <PeopleAltIcon /> },
+      { label: 'Importar base', to: '/upload', icon: <UploadFileIcon /> },
+      { label: 'Criar rota', to: '/criar-rota', icon: <AddRoadIcon /> },
+    ],
+  },
+  {
+    label: 'Gestao de acesso',
+    items: [
+      { label: 'Criar usuarios', to: '/usuarios', icon: <PersonAddAlt1Icon /> },
+      { label: 'Vendedores', to: '/vendedores', icon: <GroupIcon /> },
+    ],
+  },
+  {
+    label: 'Auditoria',
+    items: [{ label: 'Historico de rotas', to: '/historico', icon: <HistoryIcon /> }],
+  },
 ];
 
 export default function Layout() {
@@ -92,17 +107,35 @@ export default function Layout() {
       </Box>
       <Divider sx={{ borderColor: alpha(minumTokens.text.inverse, 0.14) }} />
       <List sx={{ px: 1.25, py: 1.5, flex: 1 }}>
-        {navItems.map((item) => (
-          <ListItemButton
-            key={item.to}
-            component={NavLink}
-            to={item.to}
-            onClick={() => setMobileOpen(false)}
-            sx={navItemSx}
-          >
-            <ListItemIcon>{item.icon}</ListItemIcon>
-            <ListItemText primary={item.label} primaryTypographyProps={{ fontSize: 14, fontWeight: 600 }} />
-          </ListItemButton>
+        {navigationGroups.map((group) => (
+          <Box key={group.label} sx={{ mb: 1.25 }}>
+            <ListSubheader
+              disableSticky
+              sx={{
+                bgcolor: 'transparent',
+                color: alpha(minumTokens.text.inverse, 0.48),
+                fontSize: 10,
+                fontWeight: 700,
+                lineHeight: '28px',
+                letterSpacing: 0,
+                textTransform: 'uppercase',
+              }}
+            >
+              {group.label}
+            </ListSubheader>
+            {group.items.map((item) => (
+              <ListItemButton
+                key={item.to}
+                component={NavLink}
+                to={item.to}
+                onClick={() => setMobileOpen(false)}
+                sx={navItemSx}
+              >
+                <ListItemIcon>{item.icon}</ListItemIcon>
+                <ListItemText primary={item.label} primaryTypographyProps={{ fontSize: 14, fontWeight: 600 }} />
+              </ListItemButton>
+            ))}
+          </Box>
         ))}
       </List>
       <Box p={2.5} borderTop="1px solid" borderColor={alpha(minumTokens.text.inverse, 0.14)}>
@@ -150,7 +183,7 @@ export default function Layout() {
             </Tooltip>
           )}
           <Box>
-            <Typography variant="subtitle1" color="text.primary">Painel administrativo</Typography>
+            <Typography variant="subtitle1" color="text.primary">Operacao Minum</Typography>
             <Stack direction="row" spacing={0.75} alignItems="center">
               <Box width={6} height={6} borderRadius="50%" bgcolor="secondary.main" />
               <Typography variant="caption" color="text.secondary">Dados atualizados em tempo real</Typography>

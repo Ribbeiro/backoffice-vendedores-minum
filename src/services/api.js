@@ -153,6 +153,40 @@ export async function updateUserAccess(uid, active) {
   });
 }
 
+/** Remove apenas o cadastro ativo do cliente. O historico de visitas continua
+ * preservado dentro das rotas para manter a auditoria comercial intacta. */
+export async function deleteCustomer(customerId) {
+  const key = String(customerId || '').trim();
+  if (!key) throw new Error('Nao foi possivel identificar o cliente a excluir.');
+  if (!auth.currentUser) throw new Error('Sua sessao expirou. Entre novamente.');
+
+  await remove(ref(database, `customers/${key}`));
+}
+
+/**
+ * Remove todos os espelhos da rota em uma unica operacao do Realtime Database.
+ * Assim ela some ao mesmo tempo do backoffice, do historico do aplicativo e da
+ * caixa de entrada do vendedor, sem deixar paradas ou eventos orfaos.
+ */
+export async function deleteRoute(route) {
+  const routeId = String(route?.id || '').trim();
+  if (!routeId) throw new Error('Nao foi possivel identificar a rota a excluir.');
+  if (!auth.currentUser) throw new Error('Sua sessao expirou. Entre novamente.');
+
+  const sellerUid = String(route?.sellerUid || route?.vendedor || route?.uid || '').trim();
+  const updates = {
+    [`plannedRoutes/${routeId}`]: null,
+    [`plannedRouteStops/${routeId}`]: null,
+    [`visitEvents/${routeId}`]: null,
+  };
+
+  if (sellerUid) {
+    updates[`sharedRoutesBySeller/${sellerUid}/${routeId}`] = null;
+  }
+
+  await update(ref(database), updates);
+}
+
 export async function saveUserProfile(uid, profile) {
   await set(ref(database, `users/${uid}`), profile);
 }

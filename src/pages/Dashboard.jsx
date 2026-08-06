@@ -18,6 +18,7 @@ import EmptyState from '../components/EmptyState';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import StatusIndicator from '../components/StatusIndicator';
+import { OperationalIntelligence } from './Inteligencia';
 import { minumTokens } from '../design/tokens';
 import { useData } from '../hooks/useData';
 import { buildLast7DaysVisits, calculateMetrics } from '../utils/helpers';
@@ -86,6 +87,10 @@ export default function Dashboard() {
           <MetricCard label="Visitas hoje" value={metrics.visitsToday} icon={TodayIcon} color={minumTokens.feedback.warning} />
         </Grid>
       </Grid>
+
+      <Box mb={3}>
+        <OperationalIntelligence embedded />
+      </Box>
 
       <Box mb={3}>
         <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" alignItems={{ xs: 'flex-start', md: 'center' }} spacing={1.5} mb={1.5}>
