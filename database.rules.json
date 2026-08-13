@@ -116,6 +116,21 @@
               "checkOutAt": {
                 ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && (!newData.exists() || newData.isNumber())"
               },
+              "checkOutLocation": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && (!newData.exists() || newData.hasChildren(['latitude', 'longitude']))"
+              },
+              "checkOutDistanceToCustomerMeters": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && (!newData.exists() || newData.isNumber())"
+              },
+              "visitDurationSeconds": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && (!newData.exists() || newData.isNumber())"
+              },
+              "attendances": {
+                "$attendanceId": {
+                  ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.child('sellerUid').val() === auth.uid",
+                  ".validate": "newData.hasChildren(['id', 'routeId', 'stopId', 'customerId', 'sellerUid', 'status', 'checkInAt', 'checkInLocation', 'checkInDistanceToCustomerMeters', 'updatedAt']) && newData.child('id').val() === $attendanceId && newData.child('routeId').val() === $routeId && newData.child('stopId').val() === $stopId && newData.child('sellerUid').val() === auth.uid && (newData.child('status').val() === 'in_progress' || newData.child('status').val() === 'awaiting_feedback' || newData.child('status').val() === 'visited' || newData.child('status').val() === 'not_visited') && newData.child('checkInAt').isNumber() && newData.child('checkInLocation').hasChildren(['latitude', 'longitude']) && newData.child('checkInLocation').child('latitude').isNumber() && newData.child('checkInLocation').child('longitude').isNumber() && newData.child('checkInDistanceToCustomerMeters').isNumber() && newData.child('updatedAt').isNumber()"
+                }
+              },
               "updatedAt": {
                 ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.isNumber()"
               }

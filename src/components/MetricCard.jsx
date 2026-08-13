@@ -11,7 +11,7 @@ export default function MetricCard({ label, value, icon: Icon, color = minumToke
             <Typography variant="body2" color="text.secondary">{label}</Typography>
             <Typography variant="h4" color="text.primary" sx={{ fontVariantNumeric: 'tabular-nums' }}>{value}</Typography>
           </Stack>
-          <Box display="grid" sx={{ flex: '0 0 auto', placeItems: 'center', width: 44, height: 44, borderRadius: 1, bgcolor: minumTokens.surface.subtle, color }}>
+          <Box display="grid" sx={{ flex: '0 0 auto', placeItems: 'center', width: 44, height: 44, borderRadius: 1, bgcolor: 'action.hover', color }}>
             <MinumIcon icon={Icon} size="lg" />
           </Box>
         </Stack>

@@ -13,8 +13,9 @@ import {
 } from '@mui/material';
 import StatusIndicator from './StatusIndicator';
 import { currencyBRL, formatDateTime } from '../utils/formatters';
-import { coordinatesFromCustomer } from '../utils/locationDistance';
+import { coordinatesFromCustomer, formatDistanceMeters } from '../utils/locationDistance';
 import { statusLabel } from '../utils/customerVisits';
+import { attendanceDurationSeconds } from '../utils/routeAttendances';
 
 const FIELD_GROUPS = [
   {
@@ -192,6 +193,11 @@ function VisitFeedback({ visit, route, user }) {
   const reason = visit.notVisitedReason;
   const outcome = visit.commercialOutcome;
   const nextAction = visit.nextAction;
+  const checkIn = visit.checkInAt;
+  const checkOut = visit.checkOutAt;
+  const duration = attendanceDurationSeconds(visit);
+  const checkInDistance = Number(visit.checkInDistanceToCustomerMeters);
+  const checkOutDistance = Number(visit.checkOutDistanceToCustomerMeters);
 
   return (
     <Box sx={{ borderLeft: '3px solid', borderColor: visit.status === 'visited' ? 'success.main' : 'error.main', pl: 1.25 }}>
@@ -200,6 +206,16 @@ function VisitFeedback({ visit, route, user }) {
         <Typography variant="caption" color="text.secondary">{formatDateTime(visit.timestamp)}</Typography>
       </Stack>
       <Typography variant="body2" mt={0.75}>{feedback}</Typography>
+      {(checkIn || checkOut) && (
+        <Typography variant="caption" color="text.secondary" display="block" mt={0.75}>
+          Check-in: {formatDateTime(checkIn)} | Checkout: {formatDateTime(checkOut)} | Permanencia: {duration === null ? '-' : `${Math.round(duration / 60)} min`}
+        </Typography>
+      )}
+      {(Number.isFinite(checkInDistance) || Number.isFinite(checkOutDistance)) && (
+        <Typography variant="caption" color="text.secondary" display="block" mt={0.35}>
+          Distancia no check-in: {Number.isFinite(checkInDistance) ? formatDistanceMeters(checkInDistance) : '-'} | Checkout: {Number.isFinite(checkOutDistance) ? formatDistanceMeters(checkOutDistance) : '-'}
+        </Typography>
+      )}
       {reason && <Typography variant="body2" color="text.secondary" mt={0.5}>Motivo: {reason}</Typography>}
       {outcome && <Typography variant="body2" color="text.secondary" mt={0.5}>Resultado: {outcome}</Typography>}
       {nextAction && (

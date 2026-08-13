@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Box, CircularProgress, Typography } from '@mui/material';
+import { Alert, Box, CircularProgress, Typography, useTheme } from '@mui/material';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import { minumTokens } from '../design/tokens';
@@ -11,6 +11,7 @@ const INITIAL_CENTER = [-54.8, -14.2];
 
 /** Mostra os clientes numerados e a rota por ruas antes de atribui-la ao vendedor. */
 export default function RoutePreviewMap({ customers, preview, isLoading }) {
+  const theme = useTheme();
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const markersRef = useRef([]);
@@ -87,10 +88,10 @@ export default function RoutePreviewMap({ customers, preview, isLoading }) {
   }
 
   return (
-    <Box position="relative" height={{ xs: 340, md: 440 }} borderRadius={1} overflow="hidden" bgcolor={minumTokens.feedbackSurface.info}>
+    <Box position="relative" height={{ xs: 340, md: 440 }} borderRadius={1} overflow="hidden" bgcolor="action.hover">
       <Box ref={containerRef} width="100%" height="100%" />
       {!mapLoaded && !mapError && (
-        <Box position="absolute" inset={0} display="grid" sx={{ placeItems: 'center', bgcolor: minumTokens.surface.default, opacity: 0.82 }}>
+        <Box position="absolute" inset={0} display="grid" sx={{ placeItems: 'center', bgcolor: theme.palette.background.default, opacity: 0.82 }}>
           <CircularProgress />
         </Box>
       )}
@@ -101,7 +102,7 @@ export default function RoutePreviewMap({ customers, preview, isLoading }) {
         </Box>
       )}
       {!isLoading && customers.length > 1 && !preview?.geometry && mapLoaded && (
-        <Box position="absolute" left={16} bottom={16} px={1.5} py={0.75} borderRadius={1} bgcolor={minumTokens.surface.elevated}>
+        <Box position="absolute" left={16} bottom={16} px={1.5} py={0.75} borderRadius={1} bgcolor="background.paper">
           <Typography variant="caption">Use &quot;Atualizar mapa&quot; para desenhar o trajeto real.</Typography>
         </Box>
       )}

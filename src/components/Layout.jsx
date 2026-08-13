@@ -19,12 +19,15 @@ import {
   Tooltip,
   Typography,
   useMediaQuery,
+  useTheme,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import AddRoadIcon from '@mui/icons-material/AddRoad';
 import DashboardIcon from '@mui/icons-material/Dashboard';
+import DarkModeOutlinedIcon from '@mui/icons-material/DarkModeOutlined';
 import GroupIcon from '@mui/icons-material/Group';
 import HistoryIcon from '@mui/icons-material/History';
+import LightModeOutlinedIcon from '@mui/icons-material/LightModeOutlined';
 import LogoutIcon from '@mui/icons-material/Logout';
 import MenuIcon from '@mui/icons-material/Menu';
 import PeopleAltIcon from '@mui/icons-material/PeopleAlt';
@@ -35,6 +38,7 @@ import MinumLogo from './MinumLogo';
 import { minumTokens } from '../design/tokens';
 import { useAuth } from '../hooks/useAuth';
 import { useData } from '../hooks/useData';
+import { useThemeMode } from '../context/ThemeModeContext';
 
 const drawerWidth = 272;
 
@@ -66,9 +70,11 @@ const navigationGroups = [
 
 export default function Layout() {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const theme = useTheme();
   const isDesktop = useMediaQuery('(min-width:900px)');
   const { logout, profile } = useAuth();
   const { error } = useData();
+  const { mode, toggleColorMode } = useThemeMode();
   const navigate = useNavigate();
 
   async function handleLogout() {
@@ -94,7 +100,7 @@ export default function Layout() {
   };
 
   const drawer = (
-    <Box className="minum-sidebar" height="100%" display="flex" flexDirection="column">
+    <Box className="minum-sidebar" display="flex" flexDirection="column" sx={{ height: '100%', minHeight: 0, overflow: 'hidden' }}>
       <Box px={3} pt={3} pb={2.5}>
         <MinumLogo mode="light" size="md" sx={{ width: 132 }} />
         <Typography variant="overline" sx={{ color: minumTokens.brand.light, display: 'block', mt: 2 }}>
@@ -106,7 +112,7 @@ export default function Layout() {
         <MinumLine tone="inverse" sx={{ mt: 2 }} />
       </Box>
       <Divider sx={{ borderColor: alpha(minumTokens.text.inverse, 0.14) }} />
-      <List sx={{ px: 1.25, py: 1.5, flex: 1 }}>
+      <List className="minum-sidebar-nav" sx={{ px: 1.25, py: 1.5, flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain' }}>
         {navigationGroups.map((group) => (
           <Box key={group.label} sx={{ mb: 1.25 }}>
             <ListSubheader
@@ -167,7 +173,8 @@ export default function Layout() {
         color="transparent"
         elevation={0}
         sx={{
-          bgcolor: alpha(minumTokens.surface.elevated, 0.96),
+          bgcolor: alpha(theme.palette.background.paper, 0.94),
+          backdropFilter: 'blur(12px)',
           borderBottom: '1px solid',
           borderColor: 'divider',
           width: { md: `calc(100% - ${drawerWidth}px)` },
@@ -189,6 +196,16 @@ export default function Layout() {
               <Typography variant="caption" color="text.secondary">Dados atualizados em tempo real</Typography>
             </Stack>
           </Box>
+          <Box flex={1} />
+          <Tooltip title={mode === 'dark' ? 'Usar modo claro' : 'Usar modo escuro'}>
+            <IconButton
+              onClick={toggleColorMode}
+              color="inherit"
+              aria-label={mode === 'dark' ? 'Ativar modo claro' : 'Ativar modo escuro'}
+            >
+              {mode === 'dark' ? <LightModeOutlinedIcon /> : <DarkModeOutlinedIcon />}
+            </IconButton>
+          </Tooltip>
         </Toolbar>
       </AppBar>
 
@@ -198,20 +215,39 @@ export default function Layout() {
           open={mobileOpen}
           onClose={() => setMobileOpen(false)}
           ModalProps={{ keepMounted: true }}
-          sx={{ display: { xs: 'block', md: 'none' }, '& .MuiDrawer-paper': { width: drawerWidth } }}
+          sx={{
+            display: { xs: 'block', md: 'none' },
+            '& .MuiDrawer-paper': {
+              width: drawerWidth,
+              height: '100dvh',
+              bgcolor: minumTokens.brand.primaryDark,
+              color: minumTokens.text.inverse,
+              overflow: 'hidden',
+            },
+          }}
         >
           {drawer}
         </Drawer>
         <Drawer
           variant="permanent"
-          sx={{ display: { xs: 'none', md: 'block' }, '& .MuiDrawer-paper': { width: drawerWidth, borderRight: 0 } }}
+          sx={{
+            display: { xs: 'none', md: 'block' },
+            '& .MuiDrawer-paper': {
+              width: drawerWidth,
+              height: '100dvh',
+              borderRight: 0,
+              bgcolor: minumTokens.brand.primaryDark,
+              color: minumTokens.text.inverse,
+              overflow: 'hidden',
+            },
+          }}
           open
         >
           {drawer}
         </Drawer>
       </Box>
 
-      <Box component="main" flex={1} sx={{ p: { xs: 2, md: 3.5 }, mt: 8, width: { md: `calc(100% - ${drawerWidth}px)` } }}>
+      <Box component="main" flex={1} sx={{ p: { xs: 2, md: 3.5 }, mt: 8, width: { md: `calc(100% - ${drawerWidth}px)` }, transition: 'background-color 200ms ease' }}>
         <Box maxWidth={1600} mx="auto">
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
           <Outlet />

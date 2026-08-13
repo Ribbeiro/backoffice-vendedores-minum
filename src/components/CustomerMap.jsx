@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Box, CircularProgress } from '@mui/material';
+import { Alert, Box, CircularProgress, useTheme } from '@mui/material';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import { minumTokens } from '../design/tokens';
@@ -10,6 +10,7 @@ const LAYER_ID = 'minum-customers-points';
 const INITIAL_CENTER = [-54.8, -14.2];
 
 export default function CustomerMap({ customers, selectedCustomerId, onCustomerSelect }) {
+  const theme = useTheme();
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const sourceDataRef = useRef(emptyFeatureCollection());
@@ -105,10 +106,10 @@ export default function CustomerMap({ customers, selectedCustomerId, onCustomerS
   }
 
   return (
-    <Box position="relative" height={{ xs: 420, lg: 590 }} borderRadius={1} overflow="hidden" bgcolor={minumTokens.feedbackSurface.info}>
+    <Box position="relative" height={{ xs: 420, lg: 590 }} borderRadius={1} overflow="hidden" bgcolor="action.hover">
       <Box ref={containerRef} width="100%" height="100%" />
       {!mapLoaded && !mapError && (
-        <Box position="absolute" inset={0} display="grid" sx={{ placeItems: 'center', bgcolor: minumTokens.surface.default, opacity: 0.82 }}>
+        <Box position="absolute" inset={0} display="grid" sx={{ placeItems: 'center', bgcolor: theme.palette.background.default, opacity: 0.82 }}>
           <CircularProgress />
         </Box>
       )}

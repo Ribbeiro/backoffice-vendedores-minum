@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import {
   Alert,
   Accordion,
@@ -26,7 +26,6 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import EmptyState from '../components/EmptyState';
 import PageHeader from '../components/PageHeader';
 import RouteReportPanel from '../components/RouteReportPanel';
-import { minumTokens } from '../design/tokens';
 import { useData } from '../hooks/useData';
 import { deleteRoute } from '../services/api';
 import { asArray } from '../utils/helpers';
@@ -45,6 +44,7 @@ import {
   stopVisitDurationSeconds,
   telemetryVarianceColor,
 } from '../utils/routeTelemetry';
+import { attendanceDurationSeconds, attendancesForStop } from '../utils/routeAttendances';
 
 const statusLabel = (status) => ({
   planned: 'Planejada',
@@ -54,6 +54,7 @@ const statusLabel = (status) => ({
   completed: 'Concluida',
   concluida: 'Concluida',
   not_completed: 'Nao concluida',
+  awaiting_feedback: 'Aguardando feedback',
   visited: 'Visitado',
   not_visited: 'Nao visitado',
 }[String(status || '').toLowerCase()] || status || 'Pendente');
@@ -69,7 +70,7 @@ const feedbackText = (stop) => {
   return [feedback, ...details].join('\n');
 };
 
-const feedbackDateTime = (stop) => stop.feedbackAt || stop.visitedAt || stop.visitAt || stop.arrivalTime || stop.horario || stop.timestamp;
+const feedbackDateTime = (stop) => stop.updatedAt || stop.feedbackAt || stop.visitedAt || stop.visitAt || stop.arrivalTime || stop.horario || stop.timestamp;
 
 export default function Historico() {
   const { customers, routes, routeStops, users, visitEvents } = useData();
@@ -176,8 +177,8 @@ export default function Historico() {
                       <TableRow>
                         <TableCell>Ordem</TableCell>
                         <TableCell>Cliente</TableCell>
-                        <TableCell>Chegada</TableCell>
-                        <TableCell>Data e horario</TableCell>
+                        <TableCell>Check-in</TableCell>
+                        <TableCell>Ultimo resultado</TableCell>
                         <TableCell>Permanencia</TableCell>
                         <TableCell>Distancia do cliente</TableCell>
                         <TableCell>Feedback</TableCell>
@@ -186,18 +187,38 @@ export default function Historico() {
                     </TableHead>
                     <TableBody>
                       {stops.map((stop, index) => {
-                        const distance = feedbackDistanceFromCustomer(stop, customersByKey);
+                        const attendances = attendancesForStop(stop);
+                        const latestAttendance = attendances[0] || null;
+                        const latest = latestAttendance ? { ...stop, ...latestAttendance } : stop;
+                        const distance = feedbackDistanceFromCustomer(latest, customersByKey);
+                        const attendanceDuration = latestAttendance
+                          ? attendanceDurationSeconds(latestAttendance)
+                          : stopVisitDurationSeconds(stop);
                         return (
-                          <TableRow key={stop.id}>
-                            <TableCell>{stop.order ?? stop.ordem ?? index + 1}</TableCell>
-                            <TableCell>{stop.customerName || stop.clienteNome || stop.name || stop.customerId || '-'}</TableCell>
-                            <TableCell>{formatDateTime(stop.arrivedAt || stop.arrivedAtClient)}</TableCell>
-                            <TableCell>{formatDateTime(feedbackDateTime(stop))}</TableCell>
-                            <TableCell>{formatTelemetryDuration(stopVisitDurationSeconds(stop))}</TableCell>
-                            <TableCell><DistanceCell distance={distance} /></TableCell>
-                            <TableCell sx={{ minWidth: 240, whiteSpace: 'pre-line' }}>{feedbackText(stop)}</TableCell>
-                            <TableCell>{statusLabel(stop.status || stop.result)}</TableCell>
-                          </TableRow>
+                          <Fragment key={stop.id || `${route.id}-${index}`}>
+                            <TableRow>
+                              <TableCell>{stop.order ?? stop.ordem ?? index + 1}</TableCell>
+                              <TableCell>
+                                <Typography variant="body2" fontWeight={600}>{stop.customerName || stop.clienteNome || stop.name || stop.customerId || '-'}</Typography>
+                                {attendances.length > 0 && <Typography variant="caption" color="text.secondary">{attendances.length} atendimento{attendances.length > 1 ? 's' : ''} registrado{attendances.length > 1 ? 's' : ''}</Typography>}
+                              </TableCell>
+                              <TableCell>{formatDateTime(latest.checkInAt || latest.arrivedAt || latest.arrivedAtClient)}</TableCell>
+                              <TableCell>{formatDateTime(feedbackDateTime(latest))}</TableCell>
+                              <TableCell>{formatTelemetryDuration(attendanceDuration)}</TableCell>
+                              <TableCell>
+                                <AttendanceDistanceCell attendance={latestAttendance} fallbackDistance={distance} />
+                              </TableCell>
+                              <TableCell sx={{ minWidth: 240, whiteSpace: 'pre-line' }}>{feedbackText(latest)}</TableCell>
+                              <TableCell>{statusLabel(latest.status || latest.result)}</TableCell>
+                            </TableRow>
+                            {attendances.length > 0 && (
+                              <TableRow sx={{ '& > *': { borderBottom: 0 }, bgcolor: 'action.hover' }}>
+                                <TableCell colSpan={8} sx={{ py: 1.5, pl: 5 }}>
+                                  <AttendanceHistoryTable attendances={attendances} />
+                                </TableCell>
+                              </TableRow>
+                            )}
+                          </Fragment>
                         );
                       })}
                       {stops.length === 0 && (
@@ -234,7 +255,7 @@ export default function Historico() {
 
 function TelemetrySummary({ telemetry }) {
   return (
-    <Paper variant="outlined" sx={{ p: 1.75, mb: 2, bgcolor: minumTokens.surface.subtle }}>
+    <Paper variant="outlined" sx={{ p: 1.75, mb: 2, bgcolor: 'action.hover' }}>
       <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" spacing={1.5} alignItems={{ md: 'center' }}>
         <Stack spacing={0.45}>
           <Typography variant="subtitle2">Execucao registrada pelo GPS</Typography>
@@ -253,7 +274,7 @@ function TelemetrySummary({ telemetry }) {
           />
           <Chip label={`Em rota ${formatTelemetryDuration(telemetry.actualDurationSeconds)}`} size="small" color="info" variant="outlined" />
           <Chip label={`Parado ${formatTelemetryDuration(telemetry.stoppedDurationSeconds)}`} size="small" variant="outlined" />
-          <Chip label={`Media por parada ${formatTelemetryDuration(telemetry.averageVisitDurationSeconds)}`} size="small" variant="outlined" />
+          <Chip label={`Media por atendimento ${formatTelemetryDuration(telemetry.averageVisitDurationSeconds)}`} size="small" variant="outlined" />
         </Stack>
       </Stack>
     </Paper>
@@ -273,5 +294,54 @@ function DistanceCell({ distance }) {
         <Typography variant="caption" color="text.secondary">{assessment.label}</Typography>
       </Stack>
     </Tooltip>
+  );
+}
+
+function AttendanceDistanceCell({ attendance, fallbackDistance }) {
+  const value = Number(attendance?.checkOutDistanceToCustomerMeters ?? attendance?.checkInDistanceToCustomerMeters);
+  if (Number.isFinite(value)) {
+    const assessment = distanceAssessment(value);
+    return (
+      <Tooltip title="Distancia em linha reta entre o GPS salvo no check-in ou checkout e o cliente.">
+        <Stack spacing={0.25} alignItems="flex-start" sx={{ minWidth: 132 }}>
+          <Chip label={formatDistanceMeters(value)} size="small" color={assessment.color} />
+          <Typography variant="caption" color="text.secondary">{assessment.label}</Typography>
+        </Stack>
+      </Tooltip>
+    );
+  }
+  return <DistanceCell distance={fallbackDistance} />;
+}
+
+function AttendanceHistoryTable({ attendances }) {
+  return (
+    <Table size="small" aria-label="Historico de atendimentos do cliente">
+      <TableHead>
+        <TableRow>
+          <TableCell>Atendimento</TableCell>
+          <TableCell>Check-in</TableCell>
+          <TableCell>Checkout</TableCell>
+          <TableCell>Permanencia</TableCell>
+          <TableCell>Distancia check-in</TableCell>
+          <TableCell>Distancia checkout</TableCell>
+          <TableCell>Feedback</TableCell>
+          <TableCell>Status</TableCell>
+        </TableRow>
+      </TableHead>
+      <TableBody>
+        {[...attendances].reverse().map((attendance, index) => (
+          <TableRow key={attendance.id || `${attendance.checkInAt}-${index}`}>
+            <TableCell>{index + 1}</TableCell>
+            <TableCell>{formatDateTime(attendance.checkInAt)}</TableCell>
+            <TableCell>{formatDateTime(attendance.checkOutAt)}</TableCell>
+            <TableCell>{formatTelemetryDuration(attendanceDurationSeconds(attendance))}</TableCell>
+            <TableCell>{formatDistanceMeters(Number(attendance.checkInDistanceToCustomerMeters))}</TableCell>
+            <TableCell>{formatDistanceMeters(Number(attendance.checkOutDistanceToCustomerMeters))}</TableCell>
+            <TableCell sx={{ minWidth: 260, whiteSpace: 'pre-line' }}>{feedbackText(attendance)}</TableCell>
+            <TableCell>{statusLabel(attendance.status || attendance.result)}</TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   );
 }

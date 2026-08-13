@@ -6,7 +6,7 @@ import MinumLine from './MinumLine';
 export default function EmptyState({ icon: Icon = InboxOutlinedIcon, title, description, action }) {
   return (
     <Stack alignItems="center" justifyContent="center" spacing={1.25} textAlign="center" py={5} px={3}>
-      <Box display="grid" sx={{ placeItems: 'center', width: 52, height: 52, bgcolor: minumTokens.surface.subtle, color: minumTokens.brand.primary, borderRadius: 1 }}>
+      <Box display="grid" sx={{ placeItems: 'center', width: 52, height: 52, bgcolor: 'action.hover', color: minumTokens.brand.primary, borderRadius: 1 }}>
         <Icon aria-hidden="true" />
       </Box>
       <Typography variant="h6">{title}</Typography>

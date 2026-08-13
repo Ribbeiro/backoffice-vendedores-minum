@@ -94,8 +94,8 @@ export default function RouteReportPanel({ customers, routes, routeStops, users,
         variant="outlined"
         sx={{
           p: { xs: 2, md: 2.5 },
-          borderColor: minumTokens.border.default,
-          bgcolor: minumTokens.surface.elevated,
+          borderColor: 'divider',
+          bgcolor: 'background.paper',
         }}
       >
         <Stack direction={{ xs: 'column', lg: 'row' }} justifyContent="space-between" alignItems={{ lg: 'flex-start' }} gap={2}>
@@ -246,8 +246,8 @@ export default function RouteReportPanel({ customers, routes, routeStops, users,
         sx={{
           mt: 1.5,
           p: { xs: 1.75, md: 2 },
-          borderColor: minumTokens.border.default,
-          bgcolor: minumTokens.surface.subtle,
+          borderColor: 'divider',
+          bgcolor: 'action.hover',
         }}
       >
         <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" spacing={1.25}>

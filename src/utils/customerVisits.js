@@ -1,4 +1,5 @@
 import { asArray } from './helpers';
+import { attendancesForStop } from './routeAttendances';
 
 const VISITED = 'visited';
 const NOT_VISITED = 'not_visited';
@@ -12,18 +13,24 @@ export function buildCustomerVisitIndex(routeStops) {
 
   Object.entries(routeStops || {}).forEach(([routeId, stops]) => {
     asArray(stops).forEach((stop) => {
-      const visit = {
-        ...stop,
-        routeId,
-        status: normalizeVisitStatus(stop.status || stop.result || stop.visitStatus),
-        timestamp: visitTimestamp(stop),
-        feedback: stop.feedback || stop.visitFeedback || stop.feedbackText || stop.observation || stop.notes || '',
-      };
+      const attendances = attendancesForStop(stop);
+      const sourceVisits = attendances.length ? attendances : [stop];
 
-      customerKeysFromStop(stop).forEach((key) => {
-        const current = visitsByCustomer.get(key) || [];
-        current.push(visit);
-        visitsByCustomer.set(key, current);
+      sourceVisits.forEach((attendance) => {
+        const visit = {
+          ...stop,
+          ...attendance,
+          routeId,
+          status: normalizeVisitStatus(attendance.status || attendance.result || stop.status || stop.result || stop.visitStatus),
+          timestamp: visitTimestamp(attendance),
+          feedback: attendance.feedback || attendance.visitFeedback || attendance.feedbackText || attendance.observation || attendance.notes || '',
+        };
+
+        customerKeysFromStop(stop).forEach((key) => {
+          const current = visitsByCustomer.get(key) || [];
+          current.push(visit);
+          visitsByCustomer.set(key, current);
+        });
       });
     });
   });
@@ -86,7 +93,7 @@ function normalizeVisitStatus(value) {
 }
 
 function visitTimestamp(stop) {
-  const value = stop.feedbackAt || stop.visitedAt || stop.visitAt || stop.arrivalTime || stop.updatedAt || stop.timestamp || 0;
+  const value = stop.updatedAt || stop.feedbackAt || stop.visitedAt || stop.checkOutAt || stop.checkInAt || stop.visitAt || stop.arrivalTime || stop.timestamp || 0;
   if (typeof value === 'number') return value;
 
   const numericValue = Number(value);

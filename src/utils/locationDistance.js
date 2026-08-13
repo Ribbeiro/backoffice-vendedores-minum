@@ -6,8 +6,8 @@ const EARTH_RADIUS_METERS = 6_371_008.8;
  */
 export function coordinatesFromFeedback(stop) {
   return coordinatesFromValues(
-    stop?.feedbackLocation?.latitude ?? stop?.feedbackLatitude ?? stop?.visitLocation?.latitude,
-    stop?.feedbackLocation?.longitude ?? stop?.feedbackLongitude ?? stop?.visitLocation?.longitude,
+    stop?.checkOutLocation?.latitude ?? stop?.feedbackLocation?.latitude ?? stop?.feedbackLatitude ?? stop?.visitLocation?.latitude ?? stop?.checkInLocation?.latitude,
+    stop?.checkOutLocation?.longitude ?? stop?.feedbackLocation?.longitude ?? stop?.feedbackLongitude ?? stop?.visitLocation?.longitude ?? stop?.checkInLocation?.longitude,
   );
 }
 

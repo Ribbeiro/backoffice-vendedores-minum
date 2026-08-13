@@ -1,6 +1,7 @@
 import { normalizeDate } from './formatters';
 import { asArray } from './helpers';
 import { flattenVisitEvents } from './visitEvents';
+import { attendanceDurationSeconds, completedAttendancesForStop } from './routeAttendances';
 
 const REPORTED_STOP_STATUSES = new Set(['visited', 'not_visited']);
 
@@ -61,10 +62,17 @@ export function buildRouteTelemetry(routes, routeStopsMap, visitEventsMap) {
       );
       const reportedStops = stops.filter((stop) => REPORTED_STOP_STATUSES.has(normalizeStopStatus(stop)));
       const visitedStops = reportedStops.filter((stop) => normalizeStopStatus(stop) === 'visited');
-      const stopVisitDurations = stops
-        .map(stopVisitDurationSeconds)
-        .filter((duration) => Number.isFinite(duration));
-      const totalVisitDurationSeconds = stopVisitDurations.reduce((total, duration) => total + duration, 0);
+      // Uma parada pode conter mais de uma tentativa. Para as rotas novas, a
+      // media considera todos os atendimentos concluidos, nao so o ultimo.
+      const attendanceDurations = stops.flatMap((stop) => {
+        const attendances = completedAttendancesForStop(stop);
+        if (attendances.length) {
+          return attendances.map(attendanceDurationSeconds).filter(Number.isFinite);
+        }
+        const legacyDuration = stopVisitDurationSeconds(stop);
+        return Number.isFinite(legacyDuration) ? [legacyDuration] : [];
+      });
+      const totalVisitDurationSeconds = attendanceDurations.reduce((total, duration) => total + duration, 0);
 
       return {
         route,
@@ -89,11 +97,11 @@ export function buildRouteTelemetry(routes, routeStopsMap, visitEventsMap) {
         ),
         reportedStops: reportedStops.length,
         visitedStops: visitedStops.length,
-        averageVisitDurationSeconds: stopVisitDurations.length
-          ? totalVisitDurationSeconds / stopVisitDurations.length
+        averageVisitDurationSeconds: attendanceDurations.length
+          ? totalVisitDurationSeconds / attendanceDurations.length
           : null,
-        totalVisitDurationSeconds: stopVisitDurations.length ? totalVisitDurationSeconds : null,
-        visitDurationCount: stopVisitDurations.length,
+        totalVisitDurationSeconds: attendanceDurations.length ? totalVisitDurationSeconds : null,
+        visitDurationCount: attendanceDurations.length,
         distanceVariancePercent: percentageVariance(actualDistanceMeters, plannedDistanceMeters),
         durationVariancePercent: percentageVariance(actualDurationSeconds, plannedDurationSeconds),
         lastTelemetryAt: firstTimestamp(route.lastLocationAt, lastEvent(events, 'route_progress')?.createdAt, finishEvent?.createdAt),
@@ -135,7 +143,7 @@ export function summarizeSellerTelemetry(routeMetrics) {
     current.visitedStops += item.visitedStops;
     if (Number.isFinite(item.totalVisitDurationSeconds)) {
       current.totalVisitDurationSeconds += item.totalVisitDurationSeconds;
-      current.visitDurationCount += item.stops.filter((stop) => Number.isFinite(stopVisitDurationSeconds(stop))).length;
+      current.visitDurationCount += item.visitDurationCount;
     }
     groups.set(key, current);
   });
@@ -158,11 +166,13 @@ export function summarizeSellerTelemetry(routeMetrics) {
 }
 
 export function stopVisitDurationSeconds(stop) {
+  const latestAttendance = completedAttendancesForStop(stop)[0];
+  if (latestAttendance) return attendanceDurationSeconds(latestAttendance);
   const savedDuration = numberOrNull(stop.visitDurationSeconds);
   if (savedDuration !== null) return savedDuration;
   return elapsedSeconds(
-    firstTimestamp(stop.arrivedAt, stop.arrivedAtClient),
-    firstTimestamp(stop.departedAt, stop.departedAtClient),
+    firstTimestamp(stop.checkInAt, stop.arrivedAt, stop.arrivedAtClient),
+    firstTimestamp(stop.checkOutAt, stop.departedAt, stop.departedAtClient),
   );
 }
 

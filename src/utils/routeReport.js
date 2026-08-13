@@ -6,6 +6,7 @@ import {
   feedbackDistanceFromCustomer,
 } from './locationDistance';
 import { buildRouteTelemetry, stopVisitDurationSeconds } from './routeTelemetry';
+import { attendanceDurationSeconds, attendancesForStop, completedAttendancesForStop } from './routeAttendances';
 
 const REPORTED_STOP_STATUSES = new Set(['visited', 'not_visited']);
 
@@ -93,11 +94,14 @@ function buildRouteRow({ route, routeStops, usersById, customersByKey, telemetry
   const state = clean(route.state || route.sellerState || seller?.state || fallbackState).toUpperCase();
   const status = normalizeRouteStatus(route.status, route.isCompleted);
   const totalStops = stops.length;
-  const totalVisitDurationSeconds = stops
-    .map((stop) => stopVisitDurationSeconds(stop))
-    .filter(Number.isFinite)
-    .reduce((total, duration) => total + duration, 0);
-  const visitDurationCount = stops.filter((stop) => Number.isFinite(stopVisitDurationSeconds(stop))).length;
+  const attendanceDurations = stops.flatMap((stop) => {
+    const attendances = completedAttendancesForStop(stop);
+    if (attendances.length) return attendances.map(attendanceDurationSeconds).filter(Number.isFinite);
+    const legacyDuration = stopVisitDurationSeconds(stop);
+    return Number.isFinite(legacyDuration) ? [legacyDuration] : [];
+  });
+  const totalVisitDurationSeconds = attendanceDurations.reduce((total, duration) => total + duration, 0);
+  const visitDurationCount = attendanceDurations.length;
 
   return {
     id: String(route.id),
@@ -141,9 +145,12 @@ function buildRouteRow({ route, routeStops, usersById, customersByKey, telemetry
 }
 
 function buildStopRow(stop, route, customersByKey) {
+  const attendances = attendancesForStop(stop);
+  const latestAttendance = attendances[0] || null;
+  const source = latestAttendance ? { ...stop, ...latestAttendance } : stop;
   const customer = customerForStop(stop, customersByKey);
-  const distance = feedbackDistanceFromCustomer(stop, customersByKey);
-  const status = normalizeStopStatus(stop.status || stop.result);
+  const distance = feedbackDistanceFromCustomer(source, customersByKey);
+  const status = normalizeStopStatus(source.status || source.result);
   const visitDurationSeconds = stopVisitDurationSeconds(stop);
 
   return {
@@ -163,26 +170,28 @@ function buildStopRow(stop, route, customersByKey) {
     city: stop.city || customer?.city || '',
     segment: stop.segment || customer?.segment || '',
     status,
+    attendanceCount: attendances.length,
     feedbackAt: firstDate(
-      stop.feedbackAt,
-      stop.visitedAt,
-      stop.visitAt,
-      stop.arrivalTime,
-      stop.horario,
-      stop.timestamp,
+      source.updatedAt,
+      source.feedbackAt,
+      source.visitedAt,
+      source.visitAt,
+      source.arrivalTime,
+      source.horario,
+      source.timestamp,
     ),
-    arrivedAt: firstDate(stop.arrivedAt, stop.arrivedAtClient, stop.checkInAt),
-    departedAt: firstDate(stop.departedAt, stop.departedAtClient, stop.checkOutAt),
+    arrivedAt: firstDate(source.arrivedAt, source.arrivedAtClient, source.checkInAt),
+    departedAt: firstDate(source.departedAt, source.departedAtClient, source.checkOutAt),
     visitDurationSeconds: finiteOrNull(visitDurationSeconds),
-    feedbackDistanceMeters: finiteOrNull(distance.meters),
+    feedbackDistanceMeters: finiteOrNull(source.checkOutDistanceToCustomerMeters ?? source.checkInDistanceToCustomerMeters ?? distance.meters),
     feedbackLocationAccuracyMeters: finiteOrNull(
-      stop.feedbackAccuracyMeters ?? stop.feedbackLocation?.accuracyMeters,
+      source.checkOutAccuracyMeters ?? source.checkInAccuracyMeters ?? source.feedbackAccuracyMeters ?? source.feedbackLocation?.accuracyMeters,
     ),
-    feedback: feedbackText(stop),
-    notVisitedReason: clean(stop.notVisitedReason),
-    commercialOutcome: clean(stop.commercialOutcome),
-    nextAction: clean(stop.nextAction),
-    nextActionDueDate: clean(stop.nextActionDueDate),
+    feedback: feedbackText(source),
+    notVisitedReason: clean(source.notVisitedReason),
+    commercialOutcome: clean(source.commercialOutcome),
+    nextAction: clean(source.nextAction),
+    nextActionDueDate: clean(source.nextActionDueDate),
   };
 }
 
