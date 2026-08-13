@@ -11,6 +11,17 @@
       ".read": "auth != null && root.child('users').child(auth.uid).child('active').val() === true && root.child('users').child(auth.uid).child('deleted').val() !== true",
       ".write": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'"
     },
+    "leadImportJobs": {
+      ".write": false,
+      ".indexOn": ["expiresAt"],
+      "$jobId": {
+        ".read": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin' && data.child('createdBy').val() === auth.uid"
+      }
+    },
+    "leadImportCache": {
+      ".read": false,
+      ".write": false
+    },
     "plannedRoutes": {
       ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'admin' || (root.child('users').child(auth.uid).child('active').val() === true && root.child('users').child(auth.uid).child('deleted').val() !== true && query.orderByChild === 'sellerUid' && query.equalTo === auth.uid))",
       ".indexOn": ["sellerUid"],
@@ -29,8 +40,8 @@
         "$routeId": {
           ".write": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'",
           "status": {
-            ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && (newData.val() === 'in_progress' || newData.val() === 'completed')"
-          },
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && (newData.val() === 'in_progress' || newData.val() === 'completed' || newData.val() === 'not_completed')"
+              },
           "isCompleted": {
             ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.isBoolean()"
           },
@@ -40,10 +51,13 @@
           "completedAt": {
             ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.isNumber()"
           },
-          "updatedAt": {
-            ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.isNumber()"
-          },
-          "stops": {
+              "updatedAt": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && newData.isNumber()"
+              },
+              "notCompletedReason": {
+                ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && (!newData.exists() || newData.isString())"
+              },
+              "stops": {
             "$stopId": {
               "status": {
                 ".write": "auth != null && auth.uid === $uid && root.child('sharedRoutesBySeller').child($uid).child($routeId).child('sellerUid').val() === auth.uid && (newData.val() === 'visited' || newData.val() === 'not_visited')"

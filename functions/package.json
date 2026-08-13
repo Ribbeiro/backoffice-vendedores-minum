@@ -1,0 +1,18 @@
+{
+  "name": "minum-odoo-import-functions",
+  "private": true,
+  "description": "Cloud Functions para importar exportacoes brutas do Odoo no ecossistema Minum.",
+  "main": "index.js",
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "lint": "node --check index.js && node --check src/odooLeadProcessor.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.0",
+    "firebase-functions": "^6.3.0",
+    "xlsx": "^0.18.5"
+  }
+}

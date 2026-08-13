@@ -15,6 +15,18 @@ export function coordinatesFromCustomer(customer) {
   return coordinatesFromValues(customer?.latitude, customer?.longitude);
 }
 
+/**
+ * Calcula a distancia em linha reta entre dois clientes com coordenadas validas.
+ * Ela e adequada para o filtro de raio; a distancia por ruas continua sendo
+ * calculada pelo Mapbox somente para a rota efetivamente selecionada.
+ */
+export function distanceBetweenCustomersMeters(firstCustomer, secondCustomer) {
+  const first = coordinatesFromCustomer(firstCustomer);
+  const second = coordinatesFromCustomer(secondCustomer);
+  if (!first || !second) return null;
+  return haversineMeters(first, second);
+}
+
 export function buildCustomerLookup(customers) {
   const lookup = new Map();
 

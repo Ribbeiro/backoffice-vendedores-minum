@@ -4,7 +4,8 @@ import reactHooks from 'eslint-plugin-react-hooks';
 import reactRefresh from 'eslint-plugin-react-refresh';
 
 export default [
-  { ignores: ['dist'] },
+  // As Functions possuem seu proprio package e validacao Node separada.
+  { ignores: ['dist', 'functions/**'] },
   js.configs.recommended,
   {
     files: ['**/*.{js,jsx}'],
@@ -13,7 +14,9 @@ export default [
       globals: {
         document: 'readonly',
         FileReader: 'readonly',
+        Blob: 'readonly',
         navigator: 'readonly',
+        URL: 'readonly',
         window: 'readonly',
       },
       parserOptions: {

@@ -60,6 +60,27 @@ A tela Upload aceita `.xlsx` e `.xls` com estes cabecalhos:
 
 O modo **Mesclar** grava/atualiza clientes por `ID`. O modo **Substituir todos** remove o no `customers` e grava somente os registros importados.
 
+### Exportacao bruta do Odoo
+
+Quando a tela de Upload identifica as colunas `Oportunidade`, `Codigo do sistema MINUM` e `Marcadores/Nome do marcador`, ela envia o arquivo para uma Cloud Function protegida por administrador. O processamento:
+
+- consolida as linhas extras de marcadores na oportunidade correta;
+- preserva CPF/CNPJ, telefone e ID como texto;
+- completa somente campos vazios confirmados por clientes existentes ou BrasilAPI;
+- gera coordenadas apenas quando a geocodificacao permanente do Mapbox estiver configurada;
+- mostra uma previa, uma planilha tratada e um CSV de auditoria antes de gravar;
+- remove automaticamente previas nao confirmadas apos 24 horas.
+
+Para habilitar o fluxo no Firebase, execute na raiz do projeto:
+
+```bash
+npm --prefix functions install
+firebase functions:secrets:set MAPBOX_ACCESS_TOKEN
+firebase deploy --only functions,database,hosting
+```
+
+O deploy de Functions requer o plano Blaze. O token do Mapbox fica somente no segredo do Firebase; nunca use uma variavel `VITE_` para ele.
+
 ## Regras de seguranca sugeridas
 
 As regras finais devem ser aplicadas no console do Firebase, nao no frontend. Exemplo base:

@@ -1,6 +1,7 @@
 import { getApp, getApps, initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getDatabase } from 'firebase/database';
+import { getFunctions } from 'firebase/functions';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -23,6 +24,8 @@ const provisioningApp = getApps().some((item) => item.name === provisioningAppNa
 
 export const auth = getAuth(app);
 export const database = getDatabase(app);
+// A importacao bruta do Odoo roda no servidor, preservando tokens e auditoria fora do navegador.
+export const cloudFunctions = getFunctions(app, import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION || 'southamerica-east1');
 export const provisioningAuth = getAuth(provisioningApp);
 export default app;
 

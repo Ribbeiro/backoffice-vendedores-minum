@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
   Alert,
+  Autocomplete,
   Box,
   Button,
   Checkbox,
@@ -22,6 +23,8 @@ import {
   TableHead,
   TableRow,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Tooltip,
   Typography,
 } from '@mui/material';
@@ -31,10 +34,12 @@ import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import CalculateIcon from '@mui/icons-material/Calculate';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import MyLocationIcon from '@mui/icons-material/MyLocation';
 import PageHeader from '../components/PageHeader';
 import RoutePreviewMap from '../components/RoutePreviewMap';
 import { createSharedRouteAssignment, getSharedRoutePreview, optimizeSharedRoute } from '../services/api';
 import { useData } from '../hooks/useData';
+import { distanceBetweenCustomersMeters } from '../utils/locationDistance';
 
 const initialForm = {
   sellerId: '',
@@ -49,6 +54,8 @@ export default function CriarRota() {
   const [form, setForm] = useState(initialForm);
   const [search, setSearch] = useState('');
   const [selectedIds, setSelectedIds] = useState([]);
+  const [anchorCustomerId, setAnchorCustomerId] = useState('');
+  const [radiusKm, setRadiusKm] = useState(10);
   const [estimate, setEstimate] = useState(null);
   const [preview, setPreview] = useState(null);
   const [isEstimating, setIsEstimating] = useState(false);
@@ -60,17 +67,37 @@ export default function CriarRota() {
   const selectedSeller = sellers.find((seller) => seller.id === form.sellerId);
   const customersById = useMemo(() => new Map(customers.map((customer) => [customerKey(customer), customer])), [customers]);
   const selectedCustomers = selectedIds.map((id) => customersById.get(id)).filter(Boolean);
-  const availableCustomers = useMemo(() => {
-    const normalizedSearch = search.trim().toLowerCase();
-    const sellerState = String(selectedSeller?.state || '').trim().toUpperCase();
+  const anchorCustomer = anchorCustomerId ? customersById.get(anchorCustomerId) || null : null;
+  const sellerCustomers = useMemo(() => {
+    if (!selectedSeller) return [];
+    const sellerState = String(selectedSeller.state || '').trim().toUpperCase();
     return customers.filter((customer) => {
       const belongsToSellerState = !sellerState || String(customer.state || '').trim().toUpperCase() === sellerState;
+      return belongsToSellerState && hasValidCoordinates(customer);
+    });
+  }, [customers, selectedSeller]);
+  const customersInRadius = useMemo(() => {
+    if (!anchorCustomer) return sellerCustomers;
+    return sellerCustomers.filter((customer) => isWithinRadius(customer, anchorCustomer, radiusKm));
+  }, [anchorCustomer, radiusKm, sellerCustomers]);
+  const availableCustomers = useMemo(() => {
+    const normalizedSearch = search.trim().toLowerCase();
+    return customersInRadius.map((customer) => {
       const searchable = [customer.name, customer.clientName, customer.opportunity, customer.city, customer.cnpjCpf]
         .join(' ')
         .toLowerCase();
-      return belongsToSellerState && hasValidCoordinates(customer) && searchable.includes(normalizedSearch);
-    }).slice(0, 150);
-  }, [customers, search, selectedSeller]);
+      return {
+        customer,
+        distanceMeters: anchorCustomer ? distanceBetweenCustomersMeters(customer, anchorCustomer) : null,
+        matchesSearch: searchable.includes(normalizedSearch),
+      };
+    }).filter((item) => item.matchesSearch)
+      .sort((first, second) => {
+        if (anchorCustomer) return (first.distanceMeters || 0) - (second.distanceMeters || 0);
+        return displayCustomerName(first.customer).localeCompare(displayCustomerName(second.customer), 'pt-BR');
+      })
+      .slice(0, 150);
+  }, [anchorCustomer, customersInRadius, search]);
   const recentAssignments = useMemo(
     () => routes.filter((route) => route.assignmentType === 'shared' || route.source === 'admin_assignment').slice(0, 5),
     [routes],
@@ -83,11 +110,42 @@ export default function CriarRota() {
   function chooseSeller(sellerId) {
     setField('sellerId', sellerId);
     setSelectedIds([]);
+    setAnchorCustomerId('');
+    clearRoutePreview();
+  }
+
+  function chooseAnchorCustomer(customer) {
+    const nextAnchorId = customer ? customerKey(customer) : '';
+    setAnchorCustomerId(nextAnchorId);
+    setSelectedIds((current) => {
+      if (!customer) return current;
+      const customersInsideRadius = current.filter((id) => {
+        const selectedCustomer = customersById.get(id);
+        return selectedCustomer && isWithinRadius(selectedCustomer, customer, radiusKm);
+      });
+      return [nextAnchorId, ...customersInsideRadius.filter((id) => id !== nextAnchorId)];
+    });
+    clearRoutePreview();
+  }
+
+  function chooseRadius(nextRadiusKm) {
+    if (!nextRadiusKm) return;
+    setRadiusKm(nextRadiusKm);
+    if (anchorCustomer) {
+      setSelectedIds((current) => {
+        const customersInsideRadius = current.filter((id) => {
+          const selectedCustomer = customersById.get(id);
+          return selectedCustomer && isWithinRadius(selectedCustomer, anchorCustomer, nextRadiusKm);
+        });
+        return [anchorCustomerId, ...customersInsideRadius.filter((id) => id !== anchorCustomerId)];
+      });
+    }
     clearRoutePreview();
   }
 
   function toggleCustomer(customer) {
     const id = customerKey(customer);
+    if (id === anchorCustomerId) return;
     setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
     clearRoutePreview();
   }
@@ -95,6 +153,8 @@ export default function CriarRota() {
   function moveCustomer(index, direction) {
     const nextIndex = index + direction;
     if (nextIndex < 0 || nextIndex >= selectedIds.length) return;
+    const movingCustomer = selectedCustomers[index];
+    if (anchorCustomerId && (customerKey(movingCustomer) === anchorCustomerId || nextIndex === 0)) return;
     setSelectedIds((current) => {
       const next = [...current];
       [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
@@ -168,6 +228,7 @@ export default function CriarRota() {
       setSuccess(`Rota ${route.name} atribuida a ${route.sellerName}.`);
       setForm(initialForm);
       setSelectedIds([]);
+      setAnchorCustomerId('');
       clearRoutePreview();
     } catch (saveError) {
       setError(saveError.message || 'Nao foi possivel criar a rota compartilhada.');
@@ -178,7 +239,7 @@ export default function CriarRota() {
 
   return (
     <>
-      <PageHeader title="Criar rota" subtitle="Atribua clientes, prazo e meta de conclusao para um vendedor." />
+      <PageHeader title="Criar rota" subtitle="Defina um prospecto principal, concentre clientes por raio e atribua a rota ao vendedor." />
       <Grid container spacing={2.5} component="form" onSubmit={handleSubmit}>
         <Grid item xs={12} lg={4}>
           <Paper sx={{ p: 2.5 }}>
@@ -196,6 +257,56 @@ export default function CriarRota() {
                   ))}
                 </Select>
               </FormControl>
+              <Box sx={{ p: 1.75, border: '1px solid', borderColor: 'divider', borderRadius: 1, bgcolor: 'action.hover' }}>
+                <Stack spacing={1.25}>
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <MyLocationIcon color="primary" fontSize="small" />
+                    <Typography variant="subtitle2">Prospecto principal e raio</Typography>
+                  </Stack>
+                  <Autocomplete
+                    size="small"
+                    options={sellerCustomers}
+                    value={anchorCustomer}
+                    disabled={!selectedSeller}
+                    onChange={(_, customer) => chooseAnchorCustomer(customer)}
+                    getOptionLabel={displayCustomerName}
+                    isOptionEqualToValue={(option, value) => customerKey(option) === customerKey(value)}
+                    noOptionsText={selectedSeller ? 'Nenhum cliente com coordenadas neste estado.' : 'Selecione um vendedor primeiro.'}
+                    renderOption={(props, customer) => (
+                      <Box component="li" {...props} key={customerKey(customer)}>
+                        <Box>
+                          <Typography variant="body2" fontWeight={700}>{displayCustomerName(customer)}</Typography>
+                          <Typography variant="caption" color="text.secondary">{customer.city || '-'} - {customer.state || '-'}</Typography>
+                        </Box>
+                      </Box>
+                    )}
+                    renderInput={(params) => <TextField {...params} label="Prospecto principal" placeholder="Escolha o ponto de partida" />}
+                  />
+                  <Box>
+                    <Typography variant="caption" color="text.secondary" display="block" mb={0.75}>Raio de selecao</Typography>
+                    <ToggleButtonGroup
+                      exclusive
+                      fullWidth
+                      size="small"
+                      value={radiusKm}
+                      disabled={!anchorCustomer}
+                      onChange={(_, value) => chooseRadius(value)}
+                      aria-label="Raio em quilometros ao redor do prospecto principal"
+                    >
+                      {[5, 10, 15, 20].map((radius) => <ToggleButton key={radius} value={radius}>{radius} km</ToggleButton>)}
+                    </ToggleButtonGroup>
+                  </Box>
+                  {anchorCustomer ? (
+                    <Typography variant="caption" color="text.secondary">
+                      {customersInRadius.length} clientes dentro de {radiusKm} km de {displayCustomerName(anchorCustomer)}. A lista e a selecao acompanham este raio.
+                    </Typography>
+                  ) : (
+                    <Typography variant="caption" color="text.secondary">
+                      Selecione um prospecto principal para revelar somente os clientes proximos.
+                    </Typography>
+                  )}
+                </Stack>
+              </Box>
               <TextField label="Nome da rota" value={form.name} onChange={(event) => setField('name', event.target.value)} fullWidth placeholder="Ex.: Sorriso - semana 1" />
               <TextField label="Data para cumprir" type="date" value={form.dueDate} onChange={(event) => setField('dueDate', event.target.value)} InputLabelProps={{ shrink: true }} required fullWidth />
               <TextField label="Meta de conclusao" type="number" value={form.targetCompletionPercent} onChange={(event) => setField('targetCompletionPercent', event.target.value)} inputProps={{ min: 1, max: 100 }} helperText="Percentual desejado de clientes visitados." fullWidth />
@@ -225,25 +336,33 @@ export default function CriarRota() {
               <Typography variant="h6">Selecionar clientes</Typography>
               <TextField label="Buscar cliente" value={search} onChange={(event) => setSearch(event.target.value)} fullWidth size="small" sx={{ mt: 1.5 }} />
               <Typography variant="caption" color="text.secondary" display="block" mt={1}>
-                {selectedSeller?.state ? `Mostrando clientes de ${selectedSeller.state}.` : 'Escolha um vendedor para filtrar pelo estado.'}
+                {!selectedSeller
+                  ? 'Escolha um vendedor para filtrar pelo estado.'
+                  : anchorCustomer
+                    ? `Clientes de ${selectedSeller.state} em um raio de ${radiusKm} km do prospecto principal.`
+                    : `Mostrando clientes de ${selectedSeller.state}. Escolha o prospecto principal para aplicar o raio.`}
               </Typography>
             </Box>
             <TableContainer sx={{ maxHeight: 610 }}>
               <Table stickyHeader size="small">
-                <TableHead><TableRow><TableCell padding="checkbox" /><TableCell>Cliente</TableCell><TableCell>Cidade</TableCell></TableRow></TableHead>
+                <TableHead><TableRow><TableCell padding="checkbox" /><TableCell>Cliente</TableCell><TableCell>Cidade</TableCell><TableCell align="right">Distancia</TableCell></TableRow></TableHead>
                 <TableBody>
-                  {availableCustomers.map((customer) => {
+                  {availableCustomers.map(({ customer, distanceMeters }) => {
                     const id = customerKey(customer);
+                    const isAnchor = id === anchorCustomerId;
                     return (
-                      <TableRow key={id} hover onClick={() => toggleCustomer(customer)} sx={{ cursor: 'pointer' }}>
-                        <TableCell padding="checkbox"><Checkbox checked={selectedIds.includes(id)} /></TableCell>
+                      <TableRow key={id} hover onClick={() => toggleCustomer(customer)} sx={{ cursor: isAnchor ? 'default' : 'pointer', bgcolor: isAnchor ? 'action.selected' : 'inherit' }}>
+                        <TableCell padding="checkbox"><Checkbox checked={selectedIds.includes(id)} disabled={isAnchor} /></TableCell>
                         <TableCell><Typography variant="body2" fontWeight={700}>{customer.name || customer.clientName || customer.opportunity}</Typography><Typography variant="caption" color="text.secondary">{customer.cnpjCpf || customer.id}</Typography></TableCell>
                         <TableCell>{customer.city || '-'}</TableCell>
+                        <TableCell align="right">
+                          {isAnchor ? <Chip size="small" color="primary" label="Principal" /> : anchorCustomer ? formatDistance(distanceMeters) : '-'}
+                        </TableCell>
                       </TableRow>
                     );
                   })}
-                  {!selectedSeller && <TableRow><TableCell colSpan={3} align="center">Selecione um vendedor primeiro.</TableCell></TableRow>}
-                  {selectedSeller && availableCustomers.length === 0 && <TableRow><TableCell colSpan={3} align="center">Nenhum cliente encontrado.</TableCell></TableRow>}
+                  {!selectedSeller && <TableRow><TableCell colSpan={4} align="center">Selecione um vendedor primeiro.</TableCell></TableRow>}
+                  {selectedSeller && availableCustomers.length === 0 && <TableRow><TableCell colSpan={4} align="center">Nenhum cliente encontrado neste raio.</TableCell></TableRow>}
                 </TableBody>
               </Table>
             </TableContainer>
@@ -262,20 +381,24 @@ export default function CriarRota() {
                 <TableBody>
                   {selectedCustomers.map((customer, index) => {
                     const previousLeg = index > 0 ? preview?.legs?.[index - 1] : null;
+                    const isAnchor = customerKey(customer) === anchorCustomerId;
                     return (
                     <TableRow key={customerKey(customer)}>
                       <TableCell>{index + 1}</TableCell>
                       <TableCell>
-                        <Typography variant="body2" fontWeight={700}>{customer.name || customer.clientName || customer.opportunity}</Typography>
+                        <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
+                          <Typography variant="body2" fontWeight={700}>{customer.name || customer.clientName || customer.opportunity}</Typography>
+                          {isAnchor && <Chip size="small" color="primary" label="Principal" />}
+                        </Stack>
                         <Typography variant="caption" color="text.secondary" display="block">{customer.city || customer.state || '-'}</Typography>
                         <Typography variant="caption" color={previousLeg ? 'primary.main' : 'text.secondary'} display="block">
-                          {index === 0 ? 'Inicio da rota' : previousLeg ? `${formatDistance(previousLeg.distanceMeters)} - ${formatDuration(previousLeg.durationSeconds)} desde a parada anterior` : 'Atualize o mapa para calcular este trecho'}
+                          {isAnchor ? `Inicio da rota e centro do raio de ${radiusKm} km` : previousLeg ? `${formatDistance(previousLeg.distanceMeters)} - ${formatDuration(previousLeg.durationSeconds)} desde a parada anterior` : 'Atualize o mapa para calcular este trecho'}
                         </Typography>
                       </TableCell>
                       <TableCell align="right">
-                        <Tooltip title="Mover para cima"><span><IconButton size="small" onClick={() => moveCustomer(index, -1)} disabled={index === 0}><ArrowUpwardIcon fontSize="small" /></IconButton></span></Tooltip>
-                        <Tooltip title="Mover para baixo"><span><IconButton size="small" onClick={() => moveCustomer(index, 1)} disabled={index === selectedCustomers.length - 1}><ArrowDownwardIcon fontSize="small" /></IconButton></span></Tooltip>
-                        <Tooltip title="Remover"><IconButton size="small" onClick={() => toggleCustomer(customer)}><DeleteOutlineIcon fontSize="small" /></IconButton></Tooltip>
+                        <Tooltip title={isAnchor ? 'O prospecto principal permanece como primeira parada' : 'Mover para cima'}><span><IconButton size="small" onClick={() => moveCustomer(index, -1)} disabled={index === 0 || isAnchor || (anchorCustomerId && index === 1)}><ArrowUpwardIcon fontSize="small" /></IconButton></span></Tooltip>
+                        <Tooltip title={isAnchor ? 'O prospecto principal permanece como primeira parada' : 'Mover para baixo'}><span><IconButton size="small" onClick={() => moveCustomer(index, 1)} disabled={index === selectedCustomers.length - 1 || isAnchor}><ArrowDownwardIcon fontSize="small" /></IconButton></span></Tooltip>
+                        <Tooltip title={isAnchor ? 'O prospecto principal permanece na rota' : 'Remover'}><span><IconButton size="small" onClick={() => toggleCustomer(customer)} disabled={isAnchor}><DeleteOutlineIcon fontSize="small" /></IconButton></span></Tooltip>
                       </TableCell>
                     </TableRow>
                     );
@@ -300,7 +423,7 @@ export default function CriarRota() {
             <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'flex-start', sm: 'center' }} gap={1} mb={2}>
               <Box>
                 <Typography variant="h6">Pre-visualizacao da rota</Typography>
-                <Typography variant="body2" color="text.secondary">Verde: inicio. Vermelho: destino. Os demais pontos seguem a ordem exibida acima.</Typography>
+                <Typography variant="body2" color="text.secondary">Verde: inicio. Vermelho: destino. Os demais pontos seguem a ordem exibida acima. O raio e apenas um filtro em linha reta; a rota do mapa segue as ruas.</Typography>
               </Box>
               {preview && <Chip label={`${formatDistance(preview.distanceMeters)} - ${formatDuration(preview.durationSeconds)}`} color="primary" />}
             </Stack>
@@ -320,6 +443,15 @@ function hasValidCoordinates(customer) {
   const latitude = Number(customer?.latitude);
   const longitude = Number(customer?.longitude);
   return Number.isFinite(latitude) && Number.isFinite(longitude) && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180 && !(latitude === 0 && longitude === 0);
+}
+
+function isWithinRadius(customer, anchorCustomer, radiusKm) {
+  const distanceMeters = distanceBetweenCustomersMeters(customer, anchorCustomer);
+  return Number.isFinite(distanceMeters) && distanceMeters <= Number(radiusKm) * 1_000;
+}
+
+function displayCustomerName(customer) {
+  return customer?.name || customer?.clientName || customer?.opportunity || customer?.externalId || customer?.id || 'Cliente sem nome';
 }
 
 function formatDistance(meters) {
