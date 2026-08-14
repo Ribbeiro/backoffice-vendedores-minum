@@ -1,16 +1,14 @@
-import CloseIcon from '@mui/icons-material/Close';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import PhoneOutlinedIcon from '@mui/icons-material/PhoneOutlined';
 import {
   Box,
   Button,
   Divider,
-  Drawer,
-  IconButton,
   Link,
   Stack,
   Typography,
 } from '@mui/material';
+import OperationalDetailsDrawer, { OperationalDrawerSection } from './OperationalDetailsDrawer';
 import StatusIndicator from './StatusIndicator';
 import { currencyBRL, formatDateTime } from '../utils/formatters';
 import { coordinatesFromCustomer, formatDistanceMeters } from '../utils/locationDistance';
@@ -82,65 +80,50 @@ export default function CustomerDetailsDrawer({
   const title = customer.name || customer.clientName || customer.opportunity || customer.id;
 
   return (
-    <Drawer
-      anchor="right"
+    <OperationalDetailsDrawer
       open={open}
       onClose={onClose}
-      PaperProps={{ sx: { width: { xs: '100%', sm: 540 }, bgcolor: 'background.default' } }}
-      aria-label={`Detalhes de ${title}`}
-    >
-      <Stack spacing={2.5} sx={{ p: { xs: 2, sm: 3 }, minHeight: '100%' }}>
-        <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1.5}>
-          <Box>
-            <Typography variant="overline" color="primary.main">Cliente</Typography>
-            <Typography variant="h5" component="h2" sx={{ mt: 0.25, pr: 1, overflowWrap: 'anywhere' }}>
-              {title}
-            </Typography>
-            <Typography variant="body2" color="text.secondary" mt={0.5}>
-              {customer.city || 'Cidade nao informada'}{customer.state ? ` - ${customer.state}` : ''}
-            </Typography>
-          </Box>
-          <IconButton aria-label="Fechar detalhes do cliente" onClick={onClose}>
-            <CloseIcon />
-          </IconButton>
-        </Stack>
-
+      eyebrow="Cliente"
+      title={title}
+      subtitle={`${customer.city || 'Cidade nao informada'}${customer.state ? ` - ${customer.state}` : ''}`}
+      status={(
         <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
           <StatusIndicator status={customer.pipelineStage || customer.status} label={customer.pipelineStage || customer.status || 'Sem etapa'} />
           {customer.active === false && <StatusIndicator status="not_visited" label="Inativo" />}
         </Stack>
-
-        {customer.phone && (
-          <Button component="a" href={`tel:${String(customer.phone).replace(/\s/g, '')}`} variant="outlined" startIcon={<PhoneOutlinedIcon />}>
-            Ligar para o cliente
-          </Button>
-        )}
-
+      )}
+      actions={customer.phone ? (
+        <Button component="a" href={`tel:${String(customer.phone).replace(/\s/g, '')}`} variant="outlined" startIcon={<PhoneOutlinedIcon />}>
+          Ligar para o cliente
+        </Button>
+      ) : null}
+      aria-label={`Detalhes de ${title}`}
+    >
+      <Stack spacing={2.5}>
         {details.map((group) => (
-          <Box key={group.title}>
-            <Divider sx={{ mb: 2 }} />
-            <Typography variant="subtitle2" mb={1.25}>{group.title}</Typography>
+          <OperationalDrawerSection key={group.title} title={group.title}>
             <Stack spacing={1.25}>
               {group.fields.map((field) => (
                 <DetailRow key={field.label} label={field.label} value={field.value} type={field.type} />
               ))}
             </Stack>
-          </Box>
+          </OperationalDrawerSection>
         ))}
 
         {extraFields.length > 0 && (
-          <Box>
+          <>
             <Divider sx={{ mb: 2 }} />
-            <Typography variant="subtitle2" mb={1.25}>Dados adicionais importados</Typography>
+            <OperationalDrawerSection title="Dados adicionais importados">
             <Stack spacing={1.25}>
               {extraFields.map(([key, value]) => <DetailRow key={key} label={humanizeKey(key)} value={value} />)}
             </Stack>
-          </Box>
+            </OperationalDrawerSection>
+          </>
         )}
 
-        <Box>
+        <>
           <Divider sx={{ mb: 2 }} />
-          <Typography variant="subtitle2" mb={1.25}>Feedbacks de visita</Typography>
+          <OperationalDrawerSection title="Feedbacks de visita">
           {visits.length === 0 && (
             <Typography variant="body2" color="text.secondary">Nenhum feedback foi registrado para este cliente.</Typography>
           )}
@@ -154,10 +137,11 @@ export default function CustomerDetailsDrawer({
               />
             ))}
           </Stack>
-        </Box>
+          </OperationalDrawerSection>
+        </>
 
         {onDelete && (
-          <Box sx={{ pt: 1 }}>
+          <>
             <Divider sx={{ mb: 2 }} />
             <Button
               color="error"
@@ -168,10 +152,10 @@ export default function CustomerDetailsDrawer({
             >
               Excluir cliente da base
             </Button>
-          </Box>
+          </>
         )}
       </Stack>
-    </Drawer>
+    </OperationalDetailsDrawer>
   );
 }
 

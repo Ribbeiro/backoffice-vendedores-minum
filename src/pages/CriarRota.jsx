@@ -40,6 +40,7 @@ import RoutePreviewMap from '../components/RoutePreviewMap';
 import { createSharedRouteAssignment, getSharedRoutePreview, optimizeSharedRoute } from '../services/api';
 import { useData } from '../hooks/useData';
 import { distanceBetweenCustomersMeters } from '../utils/locationDistance';
+import { getSellerDisplayName, isCustomerAssignedToSeller } from '../utils/sellerCustomerAssignment';
 
 const initialForm = {
   sellerId: '',
@@ -65,15 +66,14 @@ export default function CriarRota() {
   const [success, setSuccess] = useState('');
 
   const selectedSeller = sellers.find((seller) => seller.id === form.sellerId);
+  const selectedSellerName = getSellerDisplayName(selectedSeller);
   const customersById = useMemo(() => new Map(customers.map((customer) => [customerKey(customer), customer])), [customers]);
   const selectedCustomers = selectedIds.map((id) => customersById.get(id)).filter(Boolean);
   const anchorCustomer = anchorCustomerId ? customersById.get(anchorCustomerId) || null : null;
   const sellerCustomers = useMemo(() => {
     if (!selectedSeller) return [];
-    const sellerState = String(selectedSeller.state || '').trim().toUpperCase();
     return customers.filter((customer) => {
-      const belongsToSellerState = !sellerState || String(customer.state || '').trim().toUpperCase() === sellerState;
-      return belongsToSellerState && hasValidCoordinates(customer);
+      return isCustomerAssignedToSeller(customer, selectedSeller) && hasValidCoordinates(customer);
     });
   }, [customers, selectedSeller]);
   const customersInRadius = useMemo(() => {
@@ -239,7 +239,7 @@ export default function CriarRota() {
 
   return (
     <>
-      <PageHeader title="Criar rota" subtitle="Defina um prospecto principal, concentre clientes por raio e atribua a rota ao vendedor." />
+      <PageHeader title="Criar rota" subtitle="Selecione o vendedor, escolha clientes ja atribuidos a ele e concentre a rota por raio." />
       <Grid container spacing={2.5} component="form" onSubmit={handleSubmit}>
         <Grid item xs={12} lg={4}>
           <Paper sx={{ p: 2.5 }}>
@@ -271,7 +271,7 @@ export default function CriarRota() {
                     onChange={(_, customer) => chooseAnchorCustomer(customer)}
                     getOptionLabel={displayCustomerName}
                     isOptionEqualToValue={(option, value) => customerKey(option) === customerKey(value)}
-                    noOptionsText={selectedSeller ? 'Nenhum cliente com coordenadas neste estado.' : 'Selecione um vendedor primeiro.'}
+                    noOptionsText={selectedSeller ? 'Nenhum cliente atribuido a este vendedor com coordenadas validas.' : 'Selecione um vendedor primeiro.'}
                     renderOption={(props, customer) => (
                       <Box component="li" {...props} key={customerKey(customer)}>
                         <Box>
@@ -337,10 +337,10 @@ export default function CriarRota() {
               <TextField label="Buscar cliente" value={search} onChange={(event) => setSearch(event.target.value)} fullWidth size="small" sx={{ mt: 1.5 }} />
               <Typography variant="caption" color="text.secondary" display="block" mt={1}>
                 {!selectedSeller
-                  ? 'Escolha um vendedor para filtrar pelo estado.'
+                  ? 'Escolha um vendedor para mostrar somente os clientes atribuidos a ele.'
                   : anchorCustomer
-                    ? `Clientes de ${selectedSeller.state} em um raio de ${radiusKm} km do prospecto principal.`
-                    : `Mostrando clientes de ${selectedSeller.state}. Escolha o prospecto principal para aplicar o raio.`}
+                    ? 'Clientes atribuidos a ' + selectedSellerName + ' em um raio de ' + radiusKm + ' km do prospecto principal.'
+                    : 'Mostrando clientes atribuidos a ' + selectedSellerName + '. Escolha o prospecto principal para aplicar o raio.'}
               </Typography>
             </Box>
             <TableContainer sx={{ maxHeight: 610 }}>

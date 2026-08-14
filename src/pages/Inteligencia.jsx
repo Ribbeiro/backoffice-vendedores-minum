@@ -39,6 +39,12 @@ import {
   summarizeSellerTelemetry,
   telemetryVarianceColor,
 } from '../utils/routeTelemetry';
+import {
+  buildFollowUpTasks,
+  followUpStatusColor,
+  followUpStatusLabel,
+  isFollowUpOverdue,
+} from '../utils/followUpTasks';
 
 export function OperationalIntelligence({ embedded = false }) {
   const { visitEvents, routes, routeStops } = useData();
@@ -50,9 +56,7 @@ export function OperationalIntelligence({ embedded = false }) {
   );
   const sellerMetrics = useMemo(() => summarizeSellerTelemetry(routeMetrics), [routeMetrics]);
   const pendingActions = useMemo(
-    () => feedbacks
-      .filter((event) => event.nextAction)
-      .sort((first, second) => dueDateTimestamp(first) - dueDateTimestamp(second)),
+    () => buildFollowUpTasks(feedbacks),
     [feedbacks],
   );
   const completedVisits = feedbacks.filter((event) => event.visitStatus === 'visited');
@@ -261,9 +265,9 @@ export function OperationalIntelligence({ embedded = false }) {
                         <TableCell>{formatDueDate(event.nextActionDueDate)}</TableCell>
                         <TableCell>
                           <Chip
-                            label={isOverdue(event.nextActionDueDate) ? 'Em atraso' : 'Acompanhar'}
+                            label={isFollowUpOverdue(event) ? 'Em atraso' : followUpStatusLabel(event.followUpStatus)}
                             size="small"
-                            color={isOverdue(event.nextActionDueDate) ? 'error' : 'warning'}
+                            color={isFollowUpOverdue(event) ? 'error' : followUpStatusColor(event.followUpStatus)}
                           />
                         </TableCell>
                       </TableRow>
@@ -330,22 +334,9 @@ export function OperationalIntelligence({ embedded = false }) {
   );
 }
 
-function dueDateTimestamp(event) {
-  const date = normalizeDate(event.nextActionDueDate);
-  return date?.getTime() || Number.MAX_SAFE_INTEGER;
-}
-
 function formatDueDate(value) {
   const date = normalizeDate(value);
   return date ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short' }).format(date) : 'Sem data';
-}
-
-function isOverdue(value) {
-  const date = normalizeDate(value);
-  if (!date) return false;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return date < today;
 }
 
 export default function Inteligencia() {

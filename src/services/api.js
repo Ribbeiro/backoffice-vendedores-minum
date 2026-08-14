@@ -153,6 +153,38 @@ export async function updateUserAccess(uid, active) {
   });
 }
 
+/**
+ * Atualiza o acompanhamento de um proximo passo diretamente no evento que o
+ * originou. Assim a fila da Dashboard fica em tempo real, rastreavel e nao
+ * cria uma segunda fonte de verdade fora do historico da visita.
+ */
+export async function updateFollowUpTask({ routeId, stopId, eventId, status, completedByName }) {
+  if (!auth.currentUser) throw new Error('Sua sessao expirou. Entre novamente.');
+
+  const normalizedRouteId = String(routeId || '').trim();
+  const normalizedStopId = String(stopId || '').trim();
+  const normalizedEventId = String(eventId || '').trim();
+  const normalizedStatus = String(status || '').trim().toLowerCase();
+
+  if (!normalizedRouteId || !normalizedStopId || !normalizedEventId) {
+    throw new Error('Nao foi possivel identificar o proximo passo a atualizar.');
+  }
+  if (!['open', 'in_progress', 'completed'].includes(normalizedStatus)) {
+    throw new Error('O status selecionado para o acompanhamento nao e valido.');
+  }
+
+  const path = `visitEvents/${normalizedRouteId}/${normalizedStopId}/${normalizedEventId}`;
+  const isCompleted = normalizedStatus === 'completed';
+  await update(ref(database), {
+    [`${path}/followUpStatus`]: normalizedStatus,
+    [`${path}/followUpUpdatedAt`]: serverTimestamp(),
+    [`${path}/followUpUpdatedBy`]: auth.currentUser.uid,
+    [`${path}/followUpUpdatedByName`]: completedByName || auth.currentUser.displayName || auth.currentUser.email || auth.currentUser.uid,
+    [`${path}/followUpCompletedAt`]: isCompleted ? serverTimestamp() : null,
+    [`${path}/followUpCompletedBy`]: isCompleted ? auth.currentUser.uid : null,
+  });
+}
+
 /** Remove apenas o cadastro ativo do cliente. O historico de visitas continua
  * preservado dentro das rotas para manter a auditoria comercial intacta. */
 export async function deleteCustomer(customerId) {

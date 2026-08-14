@@ -26,6 +26,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import EmptyState from '../components/EmptyState';
 import PageHeader from '../components/PageHeader';
 import RouteReportPanel from '../components/RouteReportPanel';
+import RouteDetailsDrawer from '../components/RouteDetailsDrawer';
 import { useData } from '../hooks/useData';
 import { deleteRoute } from '../services/api';
 import { asArray } from '../utils/helpers';
@@ -75,6 +76,7 @@ const feedbackDateTime = (stop) => stop.updatedAt || stop.feedbackAt || stop.vis
 export default function Historico() {
   const { customers, routes, routeStops, users, visitEvents } = useData();
   const [routePendingDelete, setRoutePendingDelete] = useState(null);
+  const [selectedRouteId, setSelectedRouteId] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [actionError, setActionError] = useState(null);
   const usersById = useMemo(() => Object.fromEntries(users.map((user) => [user.id, user])), [users]);
@@ -87,6 +89,7 @@ export default function Historico() {
     () => new Map(buildRouteTelemetry(routes, routeStops, visitEvents).map((item) => [String(item.routeId), item])),
     [routes, routeStops, visitEvents],
   );
+  const selectedRoute = selectedRouteId ? routes.find((route) => String(route.id) === String(selectedRouteId)) : null;
 
   async function handleDeleteRoute() {
     if (!routePendingDelete) return;
@@ -135,6 +138,17 @@ export default function Historico() {
                     <Chip label={statusLabel(route.status)} size="small" color={route.status === 'completed' || route.status === 'concluida' ? 'success' : 'default'} />
                     <Chip label={`${stops.length} paradas`} size="small" color="primary" />
                     {isSharedAssignment && <Chip label="Atribuida" size="small" color="secondary" />}
+                    <Button
+                      size="small"
+                      variant="text"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setSelectedRouteId(route.id);
+                      }}
+                    >
+                      Resumo
+                    </Button>
                     <Button
                       size="small"
                       color="error"
@@ -237,6 +251,14 @@ export default function Historico() {
         })}
         {sortedRoutes.length === 0 && <EmptyState title="Nenhuma rota encontrada" description="Quando uma rota for planejada no aplicativo, o acompanhamento e os feedbacks aparecerao aqui." />}
       </Stack>
+      <RouteDetailsDrawer
+        route={selectedRoute}
+        open={Boolean(selectedRoute)}
+        onClose={() => setSelectedRouteId(null)}
+        stops={selectedRoute ? routeStops[selectedRoute.id] : []}
+        seller={selectedRoute ? usersById[selectedRoute.sellerUid || selectedRoute.vendedor || selectedRoute.uid] : null}
+        telemetry={selectedRoute ? telemetryByRoute.get(String(selectedRoute.id)) : null}
+      />
       <Dialog open={Boolean(routePendingDelete)} onClose={() => !isDeleting && setRoutePendingDelete(null)}>
         <DialogTitle>Excluir rota permanentemente?</DialogTitle>
         <DialogContent>
