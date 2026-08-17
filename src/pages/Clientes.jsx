@@ -18,6 +18,7 @@ import { buildCustomerVisitIndex, visitsForCustomer } from '../utils/customerVis
 const emptyFilters = {
   name: '',
   city: '',
+  state: '',
   segment: '',
   status: '',
 };
@@ -31,15 +32,17 @@ export default function Clientes() {
   const [actionError, setActionError] = useState(null);
 
   const segments = useMemo(() => unique(customers.map((customer) => customer.segment)), [customers]);
+  const states = useMemo(() => unique(customers.map((customer) => customer.state)), [customers]);
   const statuses = useMemo(() => unique(customers.map((customer) => customer.pipelineStage)), [customers]);
 
   const filteredCustomers = useMemo(() => {
     return customers.filter((customer) => {
       const nameMatch = includes(customer.name, filters.name);
       const cityMatch = includes(customer.city, filters.city);
+      const stateMatch = !filters.state || customer.state === filters.state;
       const segmentMatch = !filters.segment || customer.segment === filters.segment;
       const statusMatch = !filters.status || customer.pipelineStage === filters.status;
-      return nameMatch && cityMatch && segmentMatch && statusMatch;
+      return nameMatch && cityMatch && stateMatch && segmentMatch && statusMatch;
     });
   }, [customers, filters]);
   const customerVisits = useMemo(() => buildCustomerVisitIndex(routeStops), [routeStops]);
@@ -67,7 +70,7 @@ export default function Clientes() {
     <>
       <PageHeader title="Clientes" subtitle="Base compartilhada com o app Android. Clique em um cliente para consultar todos os dados e feedbacks." />
       {actionError && <Alert severity="error" sx={{ mb: 2 }}>{actionError}</Alert>}
-      <CustomerFilters filters={filters} onChange={setFilters} segments={segments} statuses={statuses} />
+      <CustomerFilters filters={filters} onChange={setFilters} segments={segments} states={states} statuses={statuses} />
       <CustomersTable
         customers={filteredCustomers}
         selectedCustomerId={selectedCustomerId}
