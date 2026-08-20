@@ -9,7 +9,7 @@ import Historico from './pages/Historico.jsx';
 import Login from './pages/Login.jsx';
 import Upload from './pages/Upload.jsx';
 import Usuarios from './pages/Usuarios.jsx';
-import Vendedores from './pages/Vendedores.jsx';
+import Revalidacao from './pages/Revalidacao.jsx';
 
 export default function App() {
   return (
@@ -27,6 +27,7 @@ export default function App() {
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="clientes" element={<Clientes />} />
+          <Route path="revalidacao" element={<Revalidacao />} />
           <Route path="criar-rota" element={<CriarRota />} />
           <Route path="upload" element={<Upload />} />
           <Route path="historico" element={<Historico />} />

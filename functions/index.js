@@ -5,6 +5,15 @@ const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { defineSecret, defineString } = require('firebase-functions/params');
 const logger = require('firebase-functions/logger');
+
+const {
+  GEOCODING_ALGORITHM_VERSION,
+  canonicalKey,
+  parseBrazilianAddress,
+} = require('./src/addressNormalizer');
+const {
+  createMapboxGeocoderClient,
+} = require('./src/mapboxGeocoder');
 const {
   ProcessorError,
   buildFirebaseCustomer,
@@ -12,6 +21,9 @@ const {
   processOdooWorkbook,
   toFirebaseKey,
 } = require('./src/odooLeadProcessor');
+const {
+  auditExistingCustomers,
+} = require('./src/revalidationService');
 
 if (!getApps().length) initializeApp();
 
@@ -22,7 +34,7 @@ const JOB_TTL_MS = 24 * 60 * 60 * 1000;
 const CNPJ_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const GEOCODE_CACHE_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 const MAPBOX_ACCESS_TOKEN = defineSecret('MAPBOX_ACCESS_TOKEN');
-const MAPBOX_GEOCODING_PERMANENT = defineString('MAPBOX_GEOCODING_PERMANENT', { default: 'false' });
+const MAPBOX_GEOCODING_PERMANENT = defineString('MAPBOX_GEOCODING_PERMANENT', { default: 'true' });
 
 function normalizeRole(value) {
   return String(value || '').trim().toLowerCase();
@@ -30,7 +42,7 @@ function normalizeRole(value) {
 
 async function requireActiveAdmin(request) {
   if (!request.auth?.uid) {
-    throw new HttpsError('unauthenticated', 'Entre novamente para processar a importação.');
+    throw new HttpsError('unauthenticated', 'Entre novamente para continuar.');
   }
 
   const snapshot = await database.ref(`users/${request.auth.uid}`).get();
@@ -41,7 +53,7 @@ async function requireActiveAdmin(request) {
     && profile?.deleted !== true;
 
   if (!allowed) {
-    throw new HttpsError('permission-denied', 'Sua conta não possui permissão administrativa para importar dados.');
+    throw new HttpsError('permission-denied', 'Sua conta não possui permissão administrativa.');
   }
 
   return profile;
@@ -135,39 +147,6 @@ function createCnpjLookup() {
   };
 }
 
-function stateFromMapboxFeature(feature) {
-  const context = feature?.properties?.context || feature?.context || {};
-  const region = context.region || {};
-  const code = String(region.region_code || region.short_code || '').toUpperCase();
-  const codeMatch = code.match(/BR-([A-Z]{2})$/);
-  if (codeMatch) return codeMatch[1];
-
-  const regionName = String(region.name || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
-  const found = Object.entries({
-    AC: 'ACRE', AL: 'ALAGOAS', AP: 'AMAPA', AM: 'AMAZONAS', BA: 'BAHIA', CE: 'CEARA', DF: 'DISTRITO FEDERAL',
-    ES: 'ESPIRITO SANTO', GO: 'GOIAS', MA: 'MARANHAO', MT: 'MATO GROSSO', MS: 'MATO GROSSO DO SUL',
-    MG: 'MINAS GERAIS', PA: 'PARA', PB: 'PARAIBA', PR: 'PARANA', PE: 'PERNAMBUCO', PI: 'PIAUI',
-    RJ: 'RIO DE JANEIRO', RN: 'RIO GRANDE DO NORTE', RS: 'RIO GRANDE DO SUL', RO: 'RONDONIA',
-    RR: 'RORAIMA', SC: 'SANTA CATARINA', SP: 'SAO PAULO', SE: 'SERGIPE', TO: 'TOCANTINS',
-  }).find(([, name]) => name === regionName);
-  return found?.[0] || '';
-}
-
-function mapboxResult(feature) {
-  const coordinates = feature?.properties?.coordinates || {};
-  const [longitude, latitude] = feature?.geometry?.coordinates || [];
-  const matchCode = feature?.properties?.match_code || {};
-  return {
-    latitude: Number(coordinates.latitude ?? latitude),
-    longitude: Number(coordinates.longitude ?? longitude),
-    state: stateFromMapboxFeature(feature),
-    accuracy: coordinates.accuracy || null,
-    confidence: matchCode.confidence || null,
-    label: feature?.properties?.full_address || feature?.properties?.name || feature?.place_name || '',
-    source: 'Mapbox Geocoding v6 (permanente)',
-  };
-}
-
 function readMapboxToken() {
   try {
     return MAPBOX_ACCESS_TOKEN.value();
@@ -179,38 +158,43 @@ function readMapboxToken() {
 
 function createGeocodeLookup() {
   const token = readMapboxToken();
-  const permanent = String(MAPBOX_GEOCODING_PERMANENT.value()).toLowerCase() === 'true';
-  if (!token || !permanent) return null;
+  if (!token) return null;
 
+  const mapboxClient = createMapboxGeocoderClient(token, { fetchJsonFn: fetchJson });
   const memory = new Map();
-  return async (query) => {
-    const cacheKey = sha256(query.toLowerCase());
-    if (memory.has(cacheKey)) return memory.get(cacheKey);
 
-    const cachePath = `leadImportCache/geocode/${cacheKey}`;
-    const cached = await getCachedValue(cachePath, GEOCODE_CACHE_TTL_MS);
-    if (cached) {
-      memory.set(cacheKey, cached);
-      return cached;
-    }
+  return {
+    async forwardGeocode(parsedAddress) {
+      const key = canonicalKey(
+        parsedAddress.street,
+        parsedAddress.houseNumber,
+        parsedAddress.place,
+        parsedAddress.region,
+        parsedAddress.postcode,
+        parsedAddress.country
+      );
+      const cacheKey = sha256(key);
 
-    const url = new URL('https://api.mapbox.com/search/geocode/v6/forward');
-    url.searchParams.set('q', query);
-    url.searchParams.set('country', 'BR');
-    url.searchParams.set('types', 'address,street,place');
-    url.searchParams.set('autocomplete', 'false');
-    url.searchParams.set('limit', '1');
-    url.searchParams.set('permanent', 'true');
-    url.searchParams.set('access_token', token);
+      if (memory.has(cacheKey)) return memory.get(cacheKey);
 
-    const response = await fetchJson(url.toString());
-    const feature = response?.features?.[0];
-    const result = feature ? mapboxResult(feature) : null;
-    if (result) {
-      await database.ref(cachePath).set({ fetchedAt: Date.now(), value: result });
-    }
-    memory.set(cacheKey, result);
-    return result;
+      const cachePath = `leadImportCache/geocode_v${GEOCODING_ALGORITHM_VERSION}/${cacheKey}`;
+      const cached = await getCachedValue(cachePath, GEOCODE_CACHE_TTL_MS);
+      if (cached) {
+        memory.set(cacheKey, cached);
+        return cached;
+      }
+
+      const result = await mapboxClient.forwardGeocode(parsedAddress);
+      if (result) {
+        await database.ref(cachePath).set({ fetchedAt: Date.now(), value: result });
+      }
+      memory.set(cacheKey, result);
+      return result;
+    },
+
+    async reverseGeocode(latitude, longitude) {
+      return mapboxClient.reverseGeocode(latitude, longitude);
+    },
   };
 }
 
@@ -224,10 +208,13 @@ function compactPreview(records) {
 function toFunctionError(error) {
   if (error instanceof HttpsError) return error;
   if (error instanceof ProcessorError) return new HttpsError(error.code || 'invalid-argument', error.message);
-  logger.error('Falha na importação Odoo', error);
-  return new HttpsError('internal', 'Não foi possível processar a planilha agora. Confira o arquivo e tente novamente.');
+  logger.error('Falha na função de backend', error);
+  return new HttpsError('internal', 'Não foi possível concluir o processamento.');
 }
 
+/**
+ * Cloud Function para processar a importação bruta de planilhas do Odoo.
+ */
 exports.processOdooLeadImport = onCall(
   {
     region: REGION,
@@ -249,7 +236,7 @@ exports.processOdooLeadImport = onCall(
         fileName,
         customers: customersSnapshot.val() || {},
         lookupCnpj: createCnpjLookup(),
-        lookupGeocode: createGeocodeLookup(),
+        mapboxGeocoderClient: createGeocodeLookup(),
         enableResearch: options.enableResearch !== false,
         enableGeocoding: options.enableGeocoding !== false,
       });
@@ -298,6 +285,9 @@ exports.cleanupExpiredOdooImportJobs = onSchedule(
   },
 );
 
+/**
+ * Cloud Function para confirmar e gravar os clientes aprovados da prévia no Firebase.
+ */
 exports.commitOdooLeadImport = onCall(
   { region: REGION, timeoutSeconds: 180, memory: '256MiB', maxInstances: 2 },
   async (request) => {
@@ -310,26 +300,12 @@ exports.commitOdooLeadImport = onCall(
       const jobReference = database.ref(`leadImportJobs/${jobId}`);
       const jobSnapshot = await jobReference.get();
       const job = jobSnapshot.val();
-      if (!job) throw new HttpsError('not-found', 'A prévia expirou ou não foi encontrada. Processe a planilha novamente.');
+      if (!job) throw new HttpsError('not-found', 'A prévia expirou ou não foi encontrada.');
       if (job.createdBy !== request.auth.uid) throw new HttpsError('permission-denied', 'Apenas quem gerou esta prévia pode confirmá-la.');
-      if (job.status !== 'preview_ready') throw new HttpsError('failed-precondition', 'Esta prévia já foi importada ou não está disponível para confirmação.');
-      if (Number(job.expiresAt || 0) < Date.now()) throw new HttpsError('failed-precondition', 'A prévia expirou. Processe a planilha novamente.');
-      if (Number(job.summary?.blockingIssues || 0) > 0) {
-        throw new HttpsError('failed-precondition', 'Há inconsistências estruturais na planilha. Baixe o relatório, corrija o arquivo e processe-o novamente.');
-      }
+      if (job.status !== 'preview_ready') throw new HttpsError('failed-precondition', 'Esta prévia já foi importada.');
 
       const records = Array.isArray(job.records) ? job.records : Object.values(job.records || {});
-      if (!records.length) throw new HttpsError('failed-precondition', 'A prévia não contém oportunidades para importar.');
-
-      const keySources = new Map();
-      records.forEach((record) => {
-        const key = toFirebaseKey(record.ID);
-        const previous = keySources.get(key);
-        if (previous && previous !== record.ID) {
-          throw new HttpsError('failed-precondition', `Os IDs ${previous} e ${record.ID} geram a mesma chave do Firebase. Revise a planilha antes de importar.`);
-        }
-        keySources.set(key, record.ID);
-      });
+      if (!records.length) throw new HttpsError('failed-precondition', 'A prévia não contém oportunidades.');
 
       const customersReference = database.ref('customers');
       const customersSnapshot = await customersReference.get();
@@ -360,12 +336,6 @@ exports.commitOdooLeadImport = onCall(
         await customersReference.set(nextCustomers);
       } else {
         const updates = {};
-        Object.entries(existingCustomers).forEach(([key, customer]) => {
-          const externalId = String(customer?.externalId || '').trim();
-          if (/^linha-\d+$/i.test(key) || /^linha-\d+$/i.test(externalId)) {
-            updates[`customers/${key}`] = null;
-          }
-        });
         Object.entries(nextCustomers).forEach(([key, customer]) => {
           updates[`customers/${key}`] = customer;
         });
@@ -381,6 +351,102 @@ exports.commitOdooLeadImport = onCall(
       });
 
       return { processed: records.length, mode, jobId };
+    } catch (error) {
+      throw toFunctionError(error);
+    }
+  },
+);
+
+/**
+ * Cloud Function para Revalidação da Base de Clientes Existentes (Seções 14, 17, 29 do prompt).
+ */
+exports.revalidateCustomerCoordinates = onCall(
+  {
+    region: REGION,
+    timeoutSeconds: 540,
+    memory: '512MiB',
+    maxInstances: 2,
+    secrets: [MAPBOX_ACCESS_TOKEN],
+  },
+  async (request) => {
+    try {
+      await requireActiveAdmin(request);
+      const customersSnapshot = await database.ref('customers').get();
+      const customers = customersSnapshot.val() || {};
+
+      const visitEventsSnapshot = await database.ref('visitAttendances').get();
+      const visitEventsByCustomer = {};
+      if (visitEventsSnapshot.exists()) {
+        visitEventsSnapshot.forEach((child) => {
+          const val = child.val();
+          const customerId = val.customerId || val.customerKey;
+          if (customerId) {
+            if (!visitEventsByCustomer[customerId]) visitEventsByCustomer[customerId] = [];
+            visitEventsByCustomer[customerId].push(val);
+          }
+        });
+      }
+
+      const mapboxClient = createGeocodeLookup();
+      const auditResults = await auditExistingCustomers({
+        customers,
+        visitEventsByCustomer,
+        mapboxGeocoderClient: mapboxClient,
+      });
+
+      return {
+        total: auditResults.length,
+        results: auditResults,
+      };
+    } catch (error) {
+      throw toFunctionError(error);
+    }
+  },
+);
+
+/**
+ * Cloud Function para busca segura e unificada de endereços utilizada pelo aplicativo Android (Seção 34).
+ */
+exports.geocodeAddress = onCall(
+  {
+    region: REGION,
+    timeoutSeconds: 30,
+    memory: '256MiB',
+    secrets: [MAPBOX_ACCESS_TOKEN],
+  },
+  async (request) => {
+    try {
+      if (!request.auth?.uid) {
+        throw new HttpsError('unauthenticated', 'Autenticação necessária.');
+      }
+      const rawAddress = String(request.data?.address || '').trim();
+      const rawCity = String(request.data?.city || '').trim();
+      const rawState = String(request.data?.state || '').trim();
+
+      if (!rawAddress && !rawCity) {
+        throw new HttpsError('invalid-argument', 'Forneça um endereço ou cidade para busca.');
+      }
+
+      const parsed = parseBrazilianAddress(rawAddress, rawCity, rawState, 'Brasil');
+      const mapboxClient = createGeocodeLookup();
+      if (!mapboxClient) {
+        throw new HttpsError('failed-precondition', 'Serviço de geocodificação indisponível.');
+      }
+
+      const result = await mapboxClient.forwardGeocode(parsed);
+      if (!result) return { found: false };
+
+      return {
+        found: true,
+        latitude: result.latitude,
+        longitude: result.longitude,
+        navigationLatitude: result.navigationLatitude,
+        navigationLongitude: result.navigationLongitude,
+        featureType: result.featureType,
+        accuracy: result.accuracy,
+        confidence: result.confidence,
+        label: result.label,
+      };
     } catch (error) {
       throw toFunctionError(error);
     }

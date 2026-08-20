@@ -51,6 +51,7 @@ const navigationGroups = [
     label: 'Operacao',
     items: [
       { label: 'Clientes', to: '/clientes', icon: <PeopleAltIcon /> },
+      { label: 'Revalidação', to: '/revalidacao', icon: <HistoryIcon /> },
       { label: 'Importar base', to: '/upload', icon: <UploadFileIcon /> },
       { label: 'Criar rota', to: '/criar-rota', icon: <AddRoadIcon /> },
     ],

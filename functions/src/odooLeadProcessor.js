@@ -1,4 +1,18 @@
 const XLSX = require('xlsx');
+const {
+  GEOCODING_ALGORITHM_VERSION,
+  canonicalKey,
+  cleanCell,
+  normalizeCityAndState,
+  normalizeString,
+  parseBrazilianAddress,
+  parseThousandHouseNumber,
+} = require('./addressNormalizer');
+const {
+  calculateHaversineDistanceMeters,
+  classifyDistance,
+  validateMapboxResponse,
+} = require('./mapboxGeocoder');
 
 const TARGET_HEADERS = Object.freeze([
   'Opportunity',
@@ -80,14 +94,6 @@ const HEADER_ALIASES = [
 ];
 
 const HEADER_MAP = new Map(HEADER_ALIASES.map(([source, target]) => [normalizeHeader(source), target]));
-const STATE_NAMES = {
-  AC: 'ACRE', AL: 'ALAGOAS', AP: 'AMAPA', AM: 'AMAZONAS', BA: 'BAHIA', CE: 'CEARA',
-  DF: 'DISTRITO FEDERAL', ES: 'ESPIRITO SANTO', GO: 'GOIAS', MA: 'MARANHAO', MT: 'MATO GROSSO',
-  MS: 'MATO GROSSO DO SUL', MG: 'MINAS GERAIS', PA: 'PARA', PB: 'PARAIBA', PR: 'PARANA',
-  PE: 'PERNAMBUCO', PI: 'PIAUI', RJ: 'RIO DE JANEIRO', RN: 'RIO GRANDE DO NORTE',
-  RS: 'RIO GRANDE DO SUL', RO: 'RONDONIA', RR: 'RORAIMA', SC: 'SANTA CATARINA', SP: 'SAO PAULO',
-  SE: 'SERGIPE', TO: 'TOCANTINS',
-};
 
 class ProcessorError extends Error {
   constructor(code, message) {
@@ -104,20 +110,6 @@ function normalizeHeader(value) {
     .toLowerCase();
 }
 
-function normalizeText(value) {
-  return String(value ?? '')
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
-}
-
-function cleanCell(value) {
-  if (value === undefined || value === null) return '';
-  return String(value).replace(/\u00a0/g, ' ').trim();
-}
-
 function onlyDigits(value) {
   return cleanCell(value).replace(/\D/g, '');
 }
@@ -125,7 +117,6 @@ function onlyDigits(value) {
 function identifierAsText(value) {
   const text = cleanCell(value);
   if (!text) return '';
-
   if (/^\d+\.0+$/.test(text)) return text.replace(/\.0+$/, '');
   return text;
 }
@@ -158,7 +149,7 @@ function splitTags(value) {
 function uniquePreservingOrder(items) {
   const known = new Set();
   return items.filter((item) => {
-    const key = normalizeText(item);
+    const key = normalizeString(item).toLowerCase();
     if (!key || known.has(key)) return false;
     known.add(key);
     return true;
@@ -174,6 +165,7 @@ function createRecord(rowNumber) {
     researchSources: [],
     coordinateStatus: 'missing',
     coordinateSource: null,
+    coordinatePrecisionLevel: 'unknown',
   };
   return record;
 }
@@ -193,7 +185,7 @@ function createAudit(record, stage, status, details, fields = [], source = '') {
 
 function appendSource(record, source) {
   if (!source) return;
-  record.__meta.researchSources = uniquePreservingOrder([...record.__meta.researchSources, source]);
+  record.__meta.researchSources = uniquePreservingOrder([...(record.__meta.researchSources || []), source]);
 }
 
 function updateResearchStatus(record, status) {
@@ -212,8 +204,8 @@ function updateResearchStatus(record, status) {
 }
 
 function chooseWorksheet(workbook) {
-  const preferred = workbook.SheetNames.find((name) => normalizeText(name) === 'sheet1')
-    || workbook.SheetNames.find((name) => normalizeText(name) === 'modelo leads')
+  const preferred = workbook.SheetNames.find((name) => normalizeString(name).toLowerCase() === 'sheet1')
+    || workbook.SheetNames.find((name) => normalizeString(name).toLowerCase() === 'modelo leads')
     || workbook.SheetNames[0];
   return workbook.Sheets[preferred];
 }
@@ -411,7 +403,10 @@ function applyReference(record, references, audit) {
   if (!isValidCoordinates(record.latitude, record.longitude) && isValidCoordinates(reference.latitude, reference.longitude)) {
     record.latitude = Number(reference.latitude);
     record.longitude = Number(reference.longitude);
-    record.__meta.coordinateStatus = 'reused';
+
+    // Seção 3.4 do prompt: Coordenadas antigas do Firebase não se transformam automaticamente em confirmed
+    record.__meta.coordinateStatus = 'legacy_unverified';
+    record.__meta.coordinatePrecisionLevel = 'legacy_unverified';
     record.__meta.coordinateSource = 'Firebase customers';
     filled.push('latitude', 'longitude');
   }
@@ -504,113 +499,136 @@ async function enrichByCnpj(record, lookupCnpj, audit, enabled) {
   }
 }
 
-function normalizeState(value) {
-  const normalized = normalizeText(value).toUpperCase();
-  if (STATE_NAMES[normalized]) return normalized;
-  return Object.entries(STATE_NAMES).find(([, name]) => normalizeText(name) === normalizeText(value))?.[0] || normalized.slice(0, 2);
-}
-
-function addressQuery(record) {
-  const parts = [
+async function enrichCoordinates(record, geocodeClient, audit, enabled) {
+  const parsedAddress = parseBrazilianAddress(
     record['Deal - Address'],
     record.Cidade,
     record['Client - State'],
-    'Brasil',
-  ].map(cleanCell).filter(Boolean);
-  const query = parts.join(', ').replace(/;/g, ',');
-  return query.split(/\s+/).slice(0, 20).join(' ').slice(0, 256);
-}
+    record.Country || 'Brasil'
+  );
 
-function isAcceptedGeocode(result, record) {
-  if (!result || !isValidCoordinates(result.latitude, result.longitude)) {
-    return { accepted: false, reason: 'A fonte não retornou coordenadas válidas.' };
-  }
+  const key = canonicalKey(
+    parsedAddress.street,
+    parsedAddress.houseNumber,
+    parsedAddress.place,
+    parsedAddress.region,
+    parsedAddress.postcode,
+    parsedAddress.country
+  );
 
-  const expectedState = normalizeState(record['Client - State']);
-  const resultState = normalizeState(result.state);
-  if (expectedState && expectedState.length === 2 && (!resultState || resultState !== expectedState)) {
-    return { accepted: false, reason: `A geocodificação não confirmou a UF ${expectedState}.` };
-  }
+  record.__meta.canonicalKey = key;
+  record.__meta.parsedAddress = parsedAddress;
 
-  const acceptableAccuracy = new Set(['rooftop', 'parcel', 'point']);
-  if (result.accuracy && !acceptableAccuracy.has(String(result.accuracy).toLowerCase())) {
-    return { accepted: false, reason: `A precisão retornada (${result.accuracy}) exige revisão humana.` };
-  }
-
-  if (result.confidence && !['exact', 'high'].includes(String(result.confidence).toLowerCase())) {
-    return { accepted: false, reason: `A confiança da correspondência (${result.confidence}) exige revisão humana.` };
-  }
-
-  return { accepted: true };
-}
-
-async function enrichCoordinates(record, lookupGeocode, audit, enabled) {
+  // Se já possui coordenadas na planilha (Odoo), inicializa como legacy_unverified se ainda não revalidado
   if (isValidCoordinates(record.latitude, record.longitude)) {
     if (record.__meta.coordinateStatus === 'missing') {
-      record.__meta.coordinateStatus = 'provided';
+      record.__meta.coordinateStatus = 'legacy_unverified';
+      record.__meta.coordinatePrecisionLevel = 'legacy_unverified';
       record.__meta.coordinateSource = 'Planilha Odoo';
+      record.__meta.sourceLatitude = Number(record.latitude);
+      record.__meta.sourceLongitude = Number(record.longitude);
+    }
+  }
+
+  if (!enabled || !geocodeClient) {
+    if (!isValidCoordinates(record.latitude, record.longitude)) {
+      record.__meta.coordinateStatus = 'pending_configuration';
     }
     return;
   }
 
-  if (!enabled) {
-    record.__meta.coordinateStatus = 'not_requested';
-    return;
-  }
-
-  if (!lookupGeocode) {
-    record.__meta.coordinateStatus = 'pending_configuration';
-    updateResearchStatus(record, 'pending_configuration');
-    audit.push(createAudit(record, 'geocoding', 'PENDING_CONFIGURATION', 'A geocodificação segura não está configurada no servidor.', ['latitude', 'longitude'], 'Mapbox Geocoding'));
-    return;
-  }
-
-  const query = addressQuery(record);
-  if (!query || !cleanCell(record['Deal - Address'])) {
+  if (!parsedAddress.street && !parsedAddress.place) {
     record.__meta.coordinateStatus = 'missing_address';
     updateResearchStatus(record, 'not_found');
-    audit.push(createAudit(record, 'geocoding', 'MISSING_ADDRESS', 'Não há endereço confirmado suficiente para geocodificar.', ['latitude', 'longitude'], ''));
+    audit.push(createAudit(record, 'geocoding', 'MISSING_ADDRESS', 'Não há endereço suficiente para geocodificar.', ['latitude', 'longitude'], ''));
     return;
   }
 
   try {
-    const result = await lookupGeocode(query, {
-      state: normalizeState(record['Client - State']),
-      city: cleanCell(record.Cidade),
-    });
+    let result = null;
+    if (typeof geocodeClient.forwardGeocode === 'function') {
+      result = await geocodeClient.forwardGeocode(parsedAddress);
+    } else if (typeof geocodeClient === 'function') {
+      // Suporte para função legada lookupGeocode(query, context)
+      const legacyRes = await geocodeClient(parsedAddress.normalizedSearchAddress, {
+        state: parsedAddress.region,
+        city: parsedAddress.place,
+      });
+      if (legacyRes) {
+        result = {
+          latitude: legacyRes.latitude,
+          longitude: legacyRes.longitude,
+          navigationLatitude: legacyRes.latitude,
+          navigationLongitude: legacyRes.longitude,
+          accuracy: legacyRes.accuracy || 'rooftop',
+          confidence: legacyRes.confidence || 'exact',
+          matchCode: { address_number: 'matched' },
+          label: legacyRes.label || parsedAddress.normalizedSearchAddress,
+          rawFeature: {
+            properties: {
+              feature_type: 'address',
+              match_code: { address_number: 'matched', confidence: legacyRes.confidence || 'exact' },
+              coordinates: { accuracy: legacyRes.accuracy || 'rooftop' },
+              context: { region: { short_code: `BR-${legacyRes.state || parsedAddress.region}` } },
+            },
+          },
+        };
+      }
+    }
+
     if (!result) {
       record.__meta.coordinateStatus = 'not_found';
       updateResearchStatus(record, 'not_found');
-      audit.push(createAudit(record, 'geocoding', 'NOT_FOUND', 'Nenhuma coordenada confirmada foi encontrada para o endereço.', ['latitude', 'longitude'], 'Mapbox Geocoding'));
+      audit.push(createAudit(record, 'geocoding', 'NOT_FOUND', 'Nenhuma coordenada foi encontrada para o endereço.', ['latitude', 'longitude'], 'Mapbox Geocoding v6'));
       return;
     }
 
-    const validation = isAcceptedGeocode(result, record);
-    if (!validation.accepted) {
-      record.__meta.coordinateStatus = 'needs_review';
+    const validation = validateMapboxResponse(result.rawFeature, parsedAddress);
+
+    // Salvar valores propostos
+    record.__meta.geocodedLatitude = result.latitude;
+    record.__meta.geocodedLongitude = result.longitude;
+    record.__meta.navigationLatitude = result.navigationLatitude;
+    record.__meta.navigationLongitude = result.navigationLongitude;
+    record.__meta.coordinatePrecisionLevel = result.accuracy || 'unknown';
+    record.__meta.providerReturnedAddress = result.label;
+
+    // Calcular diferença Haversine em relação à coordenada antiga se houver
+    if (isValidCoordinates(record.latitude, record.longitude)) {
+      const distanceMeters = calculateHaversineDistanceMeters(
+        Number(record.latitude),
+        Number(record.longitude),
+        result.latitude,
+        result.longitude
+      );
+      record.__meta.previousLatitude = Number(record.latitude);
+      record.__meta.previousLongitude = Number(record.longitude);
+      record.__meta.distanceFromPreviousMeters = distanceMeters;
+      record.__meta.distanceClassification = classifyDistance(distanceMeters);
+    }
+
+    if (validation.accepted) {
+      record.latitude = result.latitude;
+      record.longitude = result.longitude;
+      record.__meta.coordinateStatus = 'confirmed';
+      record.__meta.coordinateSource = 'Mapbox Geocoding v6';
+      appendSource(record, 'Mapbox Geocoding v6');
+      updateResearchStatus(record, 'confirmed');
+      audit.push(createAudit(record, 'geocoding', 'FILLED', `Coordenadas confirmadas para ${result.label}.`, ['latitude', 'longitude'], 'Mapbox Geocoding v6'));
+    } else {
+      record.__meta.coordinateStatus = validation.status;
       updateResearchStatus(record, 'needs_review');
-      audit.push(createAudit(record, 'geocoding', 'REJECTED', validation.reason, ['latitude', 'longitude'], result.source || 'Mapbox Geocoding'));
-      return;
+      audit.push(createAudit(record, 'geocoding', 'REJECTED', validation.reason, ['latitude', 'longitude'], 'Mapbox Geocoding v6'));
     }
-
-    record.latitude = Number(result.latitude);
-    record.longitude = Number(result.longitude);
-    record.__meta.coordinateStatus = 'confirmed';
-    record.__meta.coordinateSource = result.source || 'Mapbox Geocoding';
-    appendSource(record, result.source || 'Mapbox Geocoding');
-    updateResearchStatus(record, 'confirmed');
-    audit.push(createAudit(record, 'geocoding', 'FILLED', `Coordenadas confirmadas para ${result.label || query}.`, ['latitude', 'longitude'], result.source || 'Mapbox Geocoding'));
   } catch (error) {
     record.__meta.coordinateStatus = 'error';
-    audit.push(createAudit(record, 'geocoding', 'ERROR', cleanCell(error.message) || 'Falha ao consultar o geocodificador.', ['latitude', 'longitude'], 'Mapbox Geocoding'));
+    audit.push(createAudit(record, 'geocoding', 'ERROR', cleanCell(error.message) || 'Falha ao consultar o geocodificador.', ['latitude', 'longitude'], 'Mapbox Geocoding v6'));
   }
 }
 
 function auditSummary(audit) {
   const count = (statuses) => audit.filter((entry) => statuses.includes(entry.status)).length;
   return {
-    // "OK" na consolidacao apenas informa que a oportunidade foi lida. Ele nao
-    // representa um dado pesquisado, por isso nao entra no total de encontrados.
     found: audit.filter((entry) => entry.status === 'FILLED'
       || (entry.stage === 'cnpj_lookup' && entry.status === 'OK')).length,
     notFound: count(['NOT_FOUND', 'MISSING_ADDRESS', 'PENDING_CONFIGURATION']),
@@ -622,6 +640,7 @@ async function processOdooWorkbook(buffer, {
   fileName = 'exportacao-odoo.xlsx',
   customers = {},
   lookupCnpj = null,
+  mapboxGeocoderClient = null,
   lookupGeocode = null,
   enableResearch = true,
   enableGeocoding = true,
@@ -630,16 +649,18 @@ async function processOdooWorkbook(buffer, {
   const references = buildReferenceIndex(customers);
   const blockingIssues = validateRecords(records, audit) + stats.orphanTagRows;
 
+  const geocoder = mapboxGeocoderClient || lookupGeocode;
+
   for (const record of records) {
     applyReference(record, references, audit);
     await enrichByCnpj(record, lookupCnpj, audit, enableResearch && Boolean(lookupCnpj));
-    await enrichCoordinates(record, lookupGeocode, audit, enableGeocoding);
+    await enrichCoordinates(record, geocoder, audit, enableGeocoding);
   }
 
   const summary = {
     ...stats,
     blockingIssues,
-    coordinatesConfirmed: records.filter((record) => isValidCoordinates(record.latitude, record.longitude)).length,
+    coordinatesConfirmed: records.filter((record) => record.__meta?.coordinateStatus === 'confirmed').length,
     coordinatesMissing: records.filter((record) => !isValidCoordinates(record.latitude, record.longitude)).length,
     ...auditSummary(audit),
   };
@@ -663,6 +684,8 @@ function toFirebaseKey(value) {
 
 function buildFirebaseCustomer(record, { jobId, importedBy, importedAt }) {
   const hasCoordinates = isValidCoordinates(record.latitude, record.longitude);
+  const meta = record.__meta || {};
+
   return {
     opportunity: cleanCell(record.Opportunity),
     cpfCnpj: identifierAsText(record['(CPF/CNPJ)']),
@@ -692,8 +715,28 @@ function buildFirebaseCustomer(record, { jobId, importedBy, importedAt }) {
     status: cleanCell(record['Deal - Pipeline Stage']),
     name: cleanCell(record['Client - Name']) || cleanCell(record.Opportunity) || identifierAsText(record.ID),
     clientName: cleanCell(record['Client - Name']),
+
+    // Coordenadas Geográficas Principais
     latitude: hasCoordinates ? Number(record.latitude) : 0,
     longitude: hasCoordinates ? Number(record.longitude) : 0,
+
+    // Ponto de Navegação Veicular (Routable Point)
+    navigationLatitude: meta.navigationLatitude ?? (hasCoordinates ? Number(record.latitude) : 0),
+    navigationLongitude: meta.navigationLongitude ?? (hasCoordinates ? Number(record.longitude) : 0),
+
+    // Proveniência e Detalhes
+    sourceLatitude: meta.sourceLatitude ?? null,
+    sourceLongitude: meta.sourceLongitude ?? null,
+    geocodedLatitude: meta.geocodedLatitude ?? null,
+    geocodedLongitude: meta.geocodedLongitude ?? null,
+    previousLatitude: meta.previousLatitude ?? null,
+    previousLongitude: meta.previousLongitude ?? null,
+    distanceFromPreviousMeters: meta.distanceFromPreviousMeters ?? null,
+    coordinatePrecisionLevel: meta.coordinatePrecisionLevel || 'unknown',
+    coordinateStatus: meta.coordinateStatus || 'missing',
+    coordinateSource: meta.coordinateSource || null,
+    canonicalKey: meta.canonicalKey || null,
+
     country: cleanCell(record.Country) || 'Brasil',
     active: true,
     raw: Object.fromEntries(TARGET_HEADERS.map((header) => [header, record[header] ?? ''])),
@@ -702,11 +745,12 @@ function buildFirebaseCustomer(record, { jobId, importedBy, importedAt }) {
       jobId,
       importedBy,
       importedAt,
-      researchStatus: record.__meta?.researchStatus || 'not_checked',
-      researchSources: record.__meta?.researchSources || [],
-      coordinateStatus: record.__meta?.coordinateStatus || 'missing',
-      coordinateSource: record.__meta?.coordinateSource || null,
-      sourceRows: record.__meta?.sourceRows || [],
+      researchStatus: meta.researchStatus || 'not_checked',
+      researchSources: meta.researchSources || [],
+      coordinateStatus: meta.coordinateStatus || 'missing',
+      coordinateSource: meta.coordinateSource || null,
+      coordinatePrecisionLevel: meta.coordinatePrecisionLevel || 'unknown',
+      sourceRows: meta.sourceRows || [],
     },
   };
 }
