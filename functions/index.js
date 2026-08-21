@@ -162,7 +162,9 @@ function createCnpjLookup() {
 
 function readMapboxToken() {
   try {
-    return MAPBOX_ACCESS_TOKEN.value();
+    // Segredos podem chegar com quebra de linha quando cadastrados por arquivo.
+    // A URL do Mapbox exige o valor do token sem espacos adicionais.
+    return String(MAPBOX_ACCESS_TOKEN.value() || '').trim();
   } catch (error) {
     logger.warn('O segredo MAPBOX_ACCESS_TOKEN ainda não está configurado.', error);
     return '';
