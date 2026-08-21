@@ -40,6 +40,15 @@ import { getFunctions, httpsCallable } from 'firebase/functions';
 
 const JOB_STORAGE_KEY = 'minum.geocodingAuditJobId';
 
+function auditErrorMessage(error) {
+  const code = String(error?.code || '').toLowerCase();
+  const message = String(error?.message || '').toLowerCase();
+  if (code.includes('internal') || code.includes('unavailable') || message.includes('internal')) {
+    return 'A auditoria ainda não está disponível neste projeto Firebase. Ela precisa de Cloud Functions publicadas para processar endereços com segurança. O deploy está bloqueado enquanto o projeto permanecer no plano Spark.';
+  }
+  return error?.message || 'Não foi possível processar a auditoria de coordenadas.';
+}
+
 const FILTERS = [
   ['ALL', 'Todos'],
   ['APPROVAL_ELIGIBLE', 'Prontos para aprovação'],
@@ -224,7 +233,7 @@ export default function Revalidacao() {
       setResults((current) => fresh ? data.results || [] : mergeResults(current, data.results || []));
       if (fresh) setSelectedIds(new Set());
     } catch (err) {
-      setError(err.message || 'Não foi possível processar a auditoria de coordenadas.');
+      setError(auditErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -242,7 +251,7 @@ export default function Revalidacao() {
       setResults(data.results || []);
     } catch (err) {
       globalThis.localStorage.removeItem(JOB_STORAGE_KEY);
-      setError(err.message || 'Não foi possível retomar a auditoria salva.');
+      setError(auditErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -263,7 +272,7 @@ export default function Revalidacao() {
         : item));
       setSelectedIds(new Set());
     } catch (err) {
-      setError(err.message || 'Não foi possível aplicar as coordenadas selecionadas.');
+      setError(auditErrorMessage(err));
     } finally {
       setApplying(false);
     }
@@ -302,7 +311,7 @@ export default function Revalidacao() {
         }
         : current);
     } catch (err) {
-      setError(err.message || 'Não foi possível registrar a correção manual.');
+      setError(auditErrorMessage(err));
     } finally {
       setApplying(false);
     }
