@@ -28,7 +28,13 @@ const {
   summarizeAudit,
 } = require('./src/revalidationService');
 
-if (!getApps().length) initializeApp();
+// A URL explicita permite que o Firebase CLI carregue os endpoints durante o
+// deploy, quando o metadata automatico do Realtime Database ainda nao existe.
+if (!getApps().length) {
+  initializeApp({
+    databaseURL: process.env.FIREBASE_DATABASE_URL || 'https://vendedores-minum-default-rtdb.firebaseio.com',
+  });
+}
 
 const database = getDatabase();
 const REGION = 'southamerica-east1';
