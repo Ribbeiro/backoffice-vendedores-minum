@@ -9,6 +9,7 @@ import Historico from './pages/Historico.jsx';
 import Login from './pages/Login.jsx';
 import Upload from './pages/Upload.jsx';
 import Usuarios from './pages/Usuarios.jsx';
+import Vendedores from './pages/Vendedores.jsx';
 import Revalidacao from './pages/Revalidacao.jsx';
 
 export default function App() {

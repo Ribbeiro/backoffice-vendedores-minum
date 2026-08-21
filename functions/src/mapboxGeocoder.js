@@ -1,36 +1,27 @@
-const { normalizeString, canonicalKey } = require('./addressNormalizer');
+const { normalizeString, normalizeState } = require('./addressNormalizer');
 
-/**
- * Calcula a distância em metros entre duas coordenadas utilizando a fórmula de Haversine.
- */
-function calculateHaversineDistanceMeters(lat1, lon1, lat2, lon2) {
-  if (lat1 === null || lon1 === null || lat2 === null || lon2 === null) return null;
-  if (lat1 === lat2 && lon1 === lon2) return 0;
+const MAX_BATCH_SIZE = 50;
+const CONFIRMED_ACCURACIES = new Set(['rooftop', 'parcel', 'point']);
+const CONFIRMED_CONFIDENCES = new Set(['exact', 'high']);
+const CENTROID_FEATURE_TYPES = new Set(['street', 'place', 'locality', 'postcode', 'district', 'neighborhood']);
 
-  const R = 6371000; // Raio da Terra em metros
-  const toRad = (deg) => (deg * Math.PI) / 180;
-
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return Math.round(R * c);
+function isFiniteCoordinate(latitude, longitude) {
+  return Number.isFinite(Number(latitude))
+    && Number.isFinite(Number(longitude))
+    && (Number(latitude) !== 0 || Number(longitude) !== 0);
 }
 
-/**
- * Classifica a distância entre a coordenada antiga e a nova conforme especificado no prompt:
- * 0–100 m: normal
- * 100–300 m: attention
- * 300–500 m: suspicious
- * 500 m–2 km: critical
- * >2 km: catastrophic
- */
+function calculateHaversineDistanceMeters(lat1, lon1, lat2, lon2) {
+  if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) return null;
+  const radius = 6371000;
+  const toRadians = (degrees) => degrees * Math.PI / 180;
+  const a = Math.sin(toRadians(lat2 - lat1) / 2) ** 2
+    + Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(toRadians(lon2 - lon1) / 2) ** 2;
+  return Math.round(radius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+}
+
 function classifyDistance(distanceMeters) {
-  if (distanceMeters === null || distanceMeters === undefined) return 'unknown';
+  if (!Number.isFinite(distanceMeters)) return 'unknown';
   if (distanceMeters <= 100) return 'normal';
   if (distanceMeters <= 300) return 'attention';
   if (distanceMeters <= 500) return 'suspicious';
@@ -38,208 +29,206 @@ function classifyDistance(distanceMeters) {
   return 'catastrophic';
 }
 
-/**
- * Extrai o estado/UF de um recurso (Feature) do Mapbox.
- */
-function extractStateFromMapboxFeature(feature) {
-  const context = feature?.properties?.context || feature?.context || {};
-  const region = context.region || {};
-  const code = String(region.region_code || region.short_code || '').toUpperCase();
-  const codeMatch = code.match(/BR-([A-Z]{2})$/);
-  if (codeMatch) return codeMatch[1];
-
-  const regionName = normalizeString(region.name || '').toUpperCase();
-  const STATE_NAMES = {
-    AC: 'ACRE', AL: 'ALAGOAS', AP: 'AMAPA', AM: 'AMAZONAS', BA: 'BAHIA', CE: 'CEARA',
-    DF: 'DISTRITO FEDERAL', ES: 'ESPIRITO SANTO', GO: 'GOIAS', MA: 'MARANHAO', MT: 'MATO GROSSO',
-    MS: 'MATO GROSSO DO SUL', MG: 'MINAS GERAIS', PA: 'PARA', PB: 'PARAIBA', PR: 'PARANA',
-    PE: 'PERNAMBUCO', PI: 'PIAUI', RJ: 'RIO DE JANEIRO', RN: 'RIO GRANDE DO NORTE',
-    RS: 'RIO GRANDE DO SUL', RO: 'RONDONIA', RR: 'RORAIMA', SC: 'SANTA CATARINA', SP: 'SAO PAULO',
-    SE: 'SERGIPE', TO: 'TOCANTINS',
-  };
-  const found = Object.entries(STATE_NAMES).find(([, name]) => name === regionName);
-  return found?.[0] || '';
+function featureTypeOf(feature) {
+  return String(feature?.properties?.feature_type || feature?.place_type?.[0] || 'unknown').toLowerCase();
 }
 
-/**
- * Valida a resposta do Mapbox para um determinado endereço parsed.
- * Aplica as regras estritas do adendo/prompt.
- */
+function featureCoordinates(feature) {
+  const coordinates = feature?.properties?.coordinates || {};
+  const [longitude, latitude] = feature?.geometry?.coordinates || [];
+  return {
+    latitude: Number(coordinates.latitude ?? latitude),
+    longitude: Number(coordinates.longitude ?? longitude),
+    accuracy: String(coordinates.accuracy || feature?.properties?.accuracy || 'unknown').toLowerCase(),
+    routablePoints: Array.isArray(coordinates.routable_points) ? coordinates.routable_points : [],
+  };
+}
+
+function contextOf(feature) {
+  return feature?.properties?.context || feature?.context || {};
+}
+
+function extractStateFromMapboxFeature(feature) {
+  const region = contextOf(feature).region || {};
+  const code = String(region.region_code || region.short_code || '').toUpperCase();
+  const match = code.match(/(?:BR-)?([A-Z]{2})$/);
+  return match?.[1] || normalizeState(region.name || '');
+}
+
+function extractFeatureAddress(feature) {
+  const context = contextOf(feature);
+  const coordinates = featureCoordinates(feature);
+  return {
+    featureType: featureTypeOf(feature),
+    street: context.street?.name || feature?.properties?.street || '',
+    houseNumber: context.address?.address_number || feature?.properties?.address_number || feature?.properties?.address || '',
+    place: context.place?.name || context.locality?.name || '',
+    region: extractStateFromMapboxFeature(feature),
+    postcode: String(context.postcode?.name || '').replace(/\D/g, ''),
+    label: feature?.properties?.full_address || feature?.properties?.name || feature?.place_name || '',
+    accuracy: coordinates.accuracy,
+  };
+}
+
+function matchesText(expected, actual) {
+  const a = normalizeString(expected).toLowerCase();
+  const b = normalizeString(actual).toLowerCase();
+  return !a || !b || a === b || a.includes(b) || b.includes(a);
+}
+
+/** A resposta so vira destino confirmado quando o Mapbox prova a porta do imovel. */
 function validateMapboxResponse(feature, parsedAddress) {
-  if (!feature) {
-    return {
-      accepted: false,
-      status: 'not_found',
-      reason: 'Nenhum resultado foi retornado pelo Mapbox.',
-    };
-  }
+  if (!feature) return { accepted: false, status: 'not_found', reason: 'Nenhum resultado foi retornado pelo Mapbox.' };
 
-  const featureType = feature.properties?.feature_type || feature.place_type?.[0] || 'unknown';
-  const matchCode = feature.properties?.match_code || {};
-  const coordinates = feature.properties?.coordinates || {};
-  const accuracy = coordinates.accuracy || feature.properties?.accuracy || null;
-  const confidence = matchCode.confidence || feature.properties?.confidence || null;
-
+  const featureType = featureTypeOf(feature);
+  const matchCode = feature?.properties?.match_code;
+  const coordinates = featureCoordinates(feature);
+  const accuracy = coordinates.accuracy;
+  const confidence = String(matchCode?.confidence || feature?.properties?.confidence || 'unknown').toLowerCase();
   const resultState = extractStateFromMapboxFeature(feature);
-  const expectedState = parsedAddress.region ? parsedAddress.region.toUpperCase() : '';
+  const expectedState = normalizeState(parsedAddress.region);
+  const isNumbered = Boolean(parsedAddress.houseNumber && !parsedAddress.hasNoNumber && !parsedAddress.isRural);
 
-  // 1. Validação de Estado/UF
-  if (expectedState && expectedState.length === 2 && resultState && resultState !== expectedState) {
-    return {
-      accepted: false,
-      status: 'source_conflict',
-      reason: `A UF retornada (${resultState}) diverge da UF esperada (${expectedState}).`,
-    };
+  if (!isFiniteCoordinate(coordinates.latitude, coordinates.longitude)) {
+    return { accepted: false, status: 'not_found', reason: 'O resultado do Mapbox nao contem coordenadas validas.' };
   }
-
-  // 2. Para endereços numerados, exigir prova do número (Seção 8 do prompt)
-  const isNumbered = Boolean(parsedAddress.houseNumber && !parsedAddress.hasNoNumber);
-
+  if (expectedState && resultState && resultState !== expectedState) {
+    return { accepted: false, status: 'source_conflict', reason: `A UF retornada (${resultState}) diverge da UF esperada (${expectedState}).` };
+  }
   if (isNumbered) {
     if (featureType !== 'address') {
-      return {
-        accepted: false,
-        status: 'needs_review',
-        reason: `Endereço numerado retornou nível '${featureType}' em vez de 'address'. Exige revisão.`,
-      };
+      return { accepted: false, status: 'needs_review', reason: `Endereco numerado retornou '${featureType}', e nao uma porta de imovel.` };
     }
-
-    const numberMatch = matchCode.address_number;
-    if (numberMatch && numberMatch !== 'matched') {
-      return {
-        accepted: false,
-        status: 'needs_review',
-        reason: `Correspondência do número do imóvel é '${numberMatch}' (não exata). Exige revisão.`,
-      };
+    if (!matchCode) {
+      return { accepted: false, status: 'needs_review', reason: 'O Mapbox nao forneceu match_code para confirmar o numero do imovel.' };
     }
-
-    if (accuracy && ['interpolated', 'approximate', 'street_centroid', 'postcode_centroid'].includes(String(accuracy).toLowerCase())) {
-      return {
-        accepted: false,
-        status: 'needs_review',
-        reason: `A precisão da coordenada é '${accuracy}'. Não pode ser confirmada automaticamente como porta.`,
-      };
+    if (matchCode.address_number !== 'matched') {
+      return { accepted: false, status: 'needs_review', reason: `Numero do imovel '${matchCode.address_number || 'ausente'}' nao foi confirmado.` };
     }
+    if (parsedAddress.street && matchCode.street !== 'matched') {
+      return { accepted: false, status: 'needs_review', reason: `Logradouro '${matchCode.street || 'ausente'}' nao foi confirmado.` };
+    }
+    if (parsedAddress.place && !['matched', 'inferred', 'not_applicable'].includes(matchCode.place || '')) {
+      return { accepted: false, status: 'needs_review', reason: `Cidade '${matchCode.place || 'ausente'}' nao foi confirmada.` };
+    }
+    if (!CONFIRMED_CONFIDENCES.has(confidence)) {
+      return { accepted: false, status: 'needs_review', reason: `Confianca '${confidence}' requer revisao humana.` };
+    }
+    if (!CONFIRMED_ACCURACIES.has(accuracy)) {
+      return { accepted: false, status: 'needs_review', reason: `Precisao '${accuracy}' nao confirma a porta do imovel.` };
+    }
+    return { accepted: true, status: 'confirmed', reason: 'Porta confirmada por tipo address, match_code, confianca e precisao.' };
   }
 
-  // 3. Validação de tipo genérico (street ou place nunca podem virar confirmed)
-  if (['street', 'place', 'locality', 'postcode', 'district'].includes(featureType)) {
-    return {
-      accepted: false,
-      status: 'partial',
-      reason: `Resultado é um centroide de '${featureType}'. Não confirmado como porta exata.`,
-    };
+  if (CENTROID_FEATURE_TYPES.has(featureType) || parsedAddress.isRural || parsedAddress.hasNoNumber) {
+    return { accepted: false, status: 'needs_review', reason: 'Endereco sem numero, rural ou aproximado exige revisao humana antes de ser usado na navegacao.' };
   }
+  return { accepted: false, status: 'partial', reason: `Resultado '${featureType}' nao possui evidencias suficientes para confirmacao automatica.` };
+}
 
+function toStructuredQuery(parsedAddress) {
+  const query = { country: parsedAddress.countryCode || 'BR', limit: 1, autocomplete: false, entrances: true };
+  if (parsedAddress.street) query.street = parsedAddress.street;
+  if (parsedAddress.houseNumber && !parsedAddress.hasNoNumber && !parsedAddress.isRural) query.address_number = parsedAddress.houseNumber;
+  if (parsedAddress.place) query.place = parsedAddress.place;
+  if (parsedAddress.region) query.region = parsedAddress.region;
+  if (parsedAddress.postcode) query.postcode = parsedAddress.postcode;
+  if (parsedAddress.houseNumber) query.types = ['address'];
+  if (!parsedAddress.street && parsedAddress.normalizedSearchAddress) query.q = parsedAddress.normalizedSearchAddress;
+  return query;
+}
+
+function mapFeatureToResult(feature) {
+  if (!feature) return null;
+  const coordinates = featureCoordinates(feature);
+  if (!isFiniteCoordinate(coordinates.latitude, coordinates.longitude)) return null;
+  const defaultPoint = coordinates.routablePoints.find((point) => point?.name === 'default') || coordinates.routablePoints[0];
+  const entrancePoint = coordinates.routablePoints.find((point) => point?.name === 'entrance') || null;
+  const navigationLatitude = Number(defaultPoint?.latitude ?? coordinates.latitude);
+  const navigationLongitude = Number(defaultPoint?.longitude ?? coordinates.longitude);
+  const matchCode = feature?.properties?.match_code || null;
   return {
-    accepted: true,
-    status: 'confirmed',
-    reason: 'Endereço e número confirmados com alta precisão.',
+    latitude: coordinates.latitude,
+    longitude: coordinates.longitude,
+    navigationLatitude: isFiniteCoordinate(navigationLatitude, navigationLongitude) ? navigationLatitude : coordinates.latitude,
+    navigationLongitude: isFiniteCoordinate(navigationLatitude, navigationLongitude) ? navigationLongitude : coordinates.longitude,
+    entranceLatitude: isFiniteCoordinate(entrancePoint?.latitude, entrancePoint?.longitude) ? Number(entrancePoint.latitude) : null,
+    entranceLongitude: isFiniteCoordinate(entrancePoint?.latitude, entrancePoint?.longitude) ? Number(entrancePoint.longitude) : null,
+    featureType: featureTypeOf(feature),
+    accuracy: coordinates.accuracy,
+    confidence: String(matchCode?.confidence || feature?.properties?.confidence || 'unknown').toLowerCase(),
+    matchCode,
+    label: extractFeatureAddress(feature).label,
+    rawFeature: feature,
   };
 }
 
-/**
- * Cria o cliente de Geocodificação Mapbox v6 com Structured Input.
- */
-function createMapboxGeocoderClient(token, { fetchJsonFn }) {
+function createMapboxGeocoderClient(token, { fetchJsonFn, fetchBatchFn = null, permanent = false } = {}) {
+  if (typeof fetchJsonFn !== 'function') throw new Error('fetchJsonFn e obrigatoria para o geocodificador Mapbox.');
+  const queryUrl = (path, query) => {
+    const url = new URL(`https://api.mapbox.com/search/geocode/v6/${path}`);
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, Array.isArray(value) ? value.join(',') : String(value));
+    });
+    url.searchParams.set('access_token', token);
+    if (permanent) url.searchParams.set('permanent', 'true');
+    return url.toString();
+  };
+
   return {
-    /**
-     * Executa Forward Geocoding Estruturado.
-     */
     async forwardGeocode(parsedAddress) {
-      if (!token) throw new Error('Token do Mapbox não configurado.');
-
-      const url = new URL('https://api.mapbox.com/search/geocode/v6/forward');
-      url.searchParams.set('country', 'BR');
-      url.searchParams.set('limit', '1');
-      url.searchParams.set('permanent', 'true');
-      url.searchParams.set('access_token', token);
-
-      // Usar Structured Input conforme recomendado
-      if (parsedAddress.street) url.searchParams.set('street', parsedAddress.street);
-      if (parsedAddress.houseNumber) url.searchParams.set('address_number', parsedAddress.houseNumber);
-      if (parsedAddress.place) url.searchParams.set('place', parsedAddress.place);
-      if (parsedAddress.region) url.searchParams.set('region', parsedAddress.region);
-      if (parsedAddress.postcode) url.searchParams.set('postcode', parsedAddress.postcode);
-
-      // Se não tiver rua, usa a busca por query
-      if (!parsedAddress.street && parsedAddress.normalizedSearchAddress) {
-        url.searchParams.set('q', parsedAddress.normalizedSearchAddress);
-      }
-
-      const data = await fetchJsonFn(url.toString());
-      const feature = data?.features?.[0];
-      if (!feature) return null;
-
-      const [longitude, latitude] = feature.geometry?.coordinates || [];
-      const coordinatesProp = feature.properties?.coordinates || {};
-      const routablePoints = coordinatesProp.routable_points || [];
-
-      // Ponto de navegação veicular
-      let navigationLatitude = Number(coordinatesProp.latitude ?? latitude);
-      let navigationLongitude = Number(coordinatesProp.longitude ?? longitude);
-
-      if (routablePoints.length > 0 && routablePoints[0].latitude && routablePoints[0].longitude) {
-        navigationLatitude = Number(routablePoints[0].latitude);
-        navigationLongitude = Number(routablePoints[0].longitude);
-      }
-
-      const featureType = feature.properties?.feature_type || feature.place_type?.[0] || 'unknown';
-      const matchCode = feature.properties?.match_code || {};
-      const accuracy = coordinatesProp.accuracy || feature.properties?.accuracy || 'unknown';
-      const confidence = matchCode.confidence || feature.properties?.confidence || 'unknown';
-
-      return {
-        latitude: Number(coordinatesProp.latitude ?? latitude),
-        longitude: Number(coordinatesProp.longitude ?? longitude),
-        navigationLatitude,
-        navigationLongitude,
-        featureType,
-        accuracy,
-        confidence,
-        matchCode,
-        label: feature.properties?.full_address || feature.properties?.name || '',
-        rawFeature: feature,
-      };
+      const data = await fetchJsonFn(queryUrl('forward', toStructuredQuery(parsedAddress)));
+      return mapFeatureToResult(data?.features?.[0]);
     },
-
-    /**
-     * Executa Reverse Geocoding para Forward + Reverse Consistency Check (Seção 7 do prompt).
-     */
+    async forwardGeocodeBatch(parsedAddresses) {
+      if (!Array.isArray(parsedAddresses) || parsedAddresses.length === 0) return [];
+      if (parsedAddresses.length > MAX_BATCH_SIZE) throw new Error(`O lote Mapbox suporta ate ${MAX_BATCH_SIZE} enderecos por chamada.`);
+      if (!fetchBatchFn) return Promise.all(parsedAddresses.map((address) => this.forwardGeocode(address)));
+      const data = await fetchBatchFn(queryUrl('batch', {}), parsedAddresses.map(toStructuredQuery));
+      return (data?.batch || []).map((entry) => mapFeatureToResult(entry?.features?.[0]));
+    },
     async reverseGeocode(latitude, longitude) {
-      if (!token) return null;
-
-      const url = new URL('https://api.mapbox.com/search/geocode/v6/reverse');
-      url.searchParams.set('longitude', String(longitude));
-      url.searchParams.set('latitude', String(latitude));
-      url.searchParams.set('access_token', token);
-      url.searchParams.set('limit', '1');
-
-      try {
-        const data = await fetchJsonFn(url.toString());
-        const feature = data?.features?.[0];
-        if (!feature) return null;
-
-        const context = feature.properties?.context || {};
-        return {
-          street: context.street?.name || '',
-          houseNumber: context.address?.address_number || '',
-          place: context.place?.name || '',
-          region: extractStateFromMapboxFeature(feature),
-          postcode: context.postcode?.name || '',
-          label: feature.properties?.full_address || '',
-        };
-      } catch (err) {
-        return null;
-      }
+      const data = await fetchJsonFn(queryUrl('reverse', { latitude, longitude, country: 'BR', limit: 1, types: ['address'] }));
+      const feature = data?.features?.[0];
+      return feature ? extractFeatureAddress(feature) : null;
     },
+  };
+}
+
+function compareReverseAddress(parsedAddress, reverseAddress) {
+  if (!reverseAddress) return { checked: false, matches: null, reason: 'Reverse geocoding indisponivel.' };
+  const streetMatch = matchesText(parsedAddress.street, reverseAddress.street);
+  const numberMatch = !parsedAddress.houseNumber || String(parsedAddress.houseNumber) === String(reverseAddress.houseNumber || '');
+  const placeMatch = matchesText(parsedAddress.place, reverseAddress.place);
+  const regionMatch = !parsedAddress.region || normalizeState(parsedAddress.region) === normalizeState(reverseAddress.region);
+  const postcodeMatch = !parsedAddress.postcode || !reverseAddress.postcode || String(parsedAddress.postcode) === String(reverseAddress.postcode).replace(/\D/g, '');
+  const matches = Boolean(streetMatch && numberMatch && placeMatch && regionMatch && postcodeMatch);
+  return {
+    checked: true,
+    matches,
+    streetMatch,
+    numberMatch,
+    placeMatch,
+    regionMatch,
+    postcodeMatch,
+    reason: matches ? 'Forward e reverse consistentes.' : 'Forward e reverse divergem em ao menos um componente do endereco.',
   };
 }
 
 module.exports = {
+  CENTROID_FEATURE_TYPES,
+  CONFIRMED_ACCURACIES,
+  CONFIRMED_CONFIDENCES,
+  MAX_BATCH_SIZE,
   calculateHaversineDistanceMeters,
   classifyDistance,
+  compareReverseAddress,
   createMapboxGeocoderClient,
+  extractFeatureAddress,
   extractStateFromMapboxFeature,
+  featureTypeOf,
+  isFiniteCoordinate,
+  mapFeatureToResult,
+  toStructuredQuery,
   validateMapboxResponse,
 };

@@ -29,15 +29,37 @@ test('consolida marcadores isolados e preserva identificadores como texto', asyn
 
   const result = await processOdooWorkbook(source, {
     lookupCnpj: async () => ({ data: null, source: 'BrasilAPI' }),
-    lookupGeocode: async (query, context) => ({
-      latitude: context.state === 'MS' ? -20.4697 : -15.6014,
-      longitude: context.state === 'MS' ? -54.6201 : -56.0979,
-      state: context.state,
-      accuracy: 'rooftop',
-      confidence: 'exact',
-      label: query,
-      source: 'Teste',
-    }),
+    mapboxGeocoderClient: {
+      forwardGeocode: async (parsed) => {
+        const latitude = parsed.region === 'MS' ? -20.4697 : -15.6014;
+        const longitude = parsed.region === 'MS' ? -54.6201 : -56.0979;
+        return {
+          latitude,
+          longitude,
+          navigationLatitude: latitude,
+          navigationLongitude: longitude,
+          entranceLatitude: null,
+          entranceLongitude: null,
+          featureType: 'address',
+          accuracy: 'rooftop',
+          confidence: 'exact',
+          matchCode: { address_number: 'matched', street: 'matched', place: 'matched', confidence: 'exact' },
+          label: parsed.normalizedSearchAddress,
+          rawFeature: {
+            geometry: { coordinates: [longitude, latitude] },
+            properties: {
+              feature_type: 'address',
+              match_code: { address_number: 'matched', street: 'matched', place: 'matched', confidence: 'exact' },
+              coordinates: { latitude, longitude, accuracy: 'rooftop' },
+              context: { region: { short_code: `BR-${parsed.region}` } },
+            },
+          },
+        };
+      },
+      reverseGeocode: async (latitude) => (latitude === -20.4697
+        ? { street: 'Rua Teste', houseNumber: '10', place: 'Campo Grande', region: 'MS', postcode: '' }
+        : { street: 'Rua Dois', houseNumber: '20', place: 'Cuiaba', region: 'MT', postcode: '' }),
+    },
   });
 
   assert.equal(result.records.length, 2);

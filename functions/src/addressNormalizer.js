@@ -1,4 +1,9 @@
-const GEOCODING_ALGORITHM_VERSION = 2;
+/**
+ * Normalizacao deterministica de enderecos brasileiros antes da geocodificacao.
+ * O endereco original nunca e alterado: os campos abaixo existem apenas para
+ * pesquisa, auditoria e formacao da chave de cache.
+ */
+const GEOCODING_ALGORITHM_VERSION = 3;
 
 const STATE_NAMES = {
   AC: 'ACRE', AL: 'ALAGOAS', AP: 'AMAPA', AM: 'AMAZONAS', BA: 'BAHIA', CE: 'CEARA',
@@ -9,235 +14,202 @@ const STATE_NAMES = {
   SE: 'SERGIPE', TO: 'TOCANTINS',
 };
 
-function normalizeString(value) {
-  return String(value ?? '')
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
+const COMPLEMENT_PATTERN = /\b(?:ap(?:to)?\.?|apartamento|bloco|casa|conj(?:unto)?|ed(?:ificio)?\.?|fundos|galp(?:ao|ão)(?:port(?:ao|ão))?|loja|lote|port(?:ao|ão)|quadra|sala|sl\.?|sobreloja|torre|unidade)\b/i;
+const RURAL_PATTERN = /\b(?:zona rural|estrada|chacara|chácara|sitio|sítio|fazenda|rodovia|km\s*\d+)\b/i;
+const NO_NUMBER_PATTERN = /\b(?:s\s*\/\s*n(?:[ºo])?|sem\s+numero|sem\s+n[uú]mero|sn)\b/i;
 
 function cleanCell(value) {
   if (value === undefined || value === null) return '';
-  return String(value).replace(/\u00a0/g, ' ').trim();
+  return String(value).replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-/**
- * Normaliza o campo de cidade/estado do Odoo.
- * Exemplos:
- *   rawCity = "MS - Campo Grande", state = "MS" => { place: "Campo Grande", region: "MS" }
- *   rawCity = "Campo Grande", state = "MS" => { place: "Campo Grande", region: "MS" }
- */
+function normalizeString(value) {
+  return cleanCell(value)
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function normalizeCountryCode(value) {
+  const normalized = normalizeString(value).toUpperCase();
+  if (!normalized || normalized === 'BRASIL' || normalized === 'BRAZIL' || normalized === 'BR') return 'BR';
+  return normalized.slice(0, 2);
+}
+
+function normalizeState(value) {
+  const state = cleanCell(value).toUpperCase();
+  if (STATE_NAMES[state]) return state;
+  const normalized = normalizeString(state).toUpperCase();
+  const found = Object.entries(STATE_NAMES).find(([, name]) => name === normalized);
+  return found?.[0] || '';
+}
+
+/** Trata "MS - Campo Grande", "Campo Grande - MS" e nomes completos de UF. */
 function normalizeCityAndState(rawCity, rawState) {
-  let cityStr = cleanCell(rawCity);
-  let stateStr = cleanCell(rawState).toUpperCase();
+  let city = cleanCell(rawCity);
+  let region = normalizeState(rawState);
+  const prefix = city.match(/^([A-Za-z]{2})\s*-\s*(.+)$/);
+  const suffix = city.match(/^(.+?)\s*-\s*([A-Za-z]{2})$/);
+  if (prefix && STATE_NAMES[prefix[1].toUpperCase()]) {
+    region = prefix[1].toUpperCase();
+    city = prefix[2].trim();
+  } else if (suffix && STATE_NAMES[suffix[2].toUpperCase()]) {
+    region = suffix[2].toUpperCase();
+    city = suffix[1].trim();
+  }
+  return { place: city, region };
+}
 
-  // Caso "MS - Campo Grande" ou "SP - São Paulo"
-  const prefixMatch = cityStr.match(/^([A-Za-z]{2})\s*-\s*(.+)$/);
-  if (prefixMatch) {
-    const extractedUf = prefixMatch[1].toUpperCase();
-    if (STATE_NAMES[extractedUf]) {
-      stateStr = extractedUf;
-      cityStr = prefixMatch[2].trim();
+/** Apenas o componente do numero pode sofrer a remocao do separador de milhar. */
+function parseThousandHouseNumber(value) {
+  const cleaned = cleanCell(value);
+  if (!cleaned) return null;
+  if (/^\d{1,3}(?:\.\d{3})+$/.test(cleaned)) return cleaned.replace(/\./g, '');
+  const digits = cleaned.replace(/\D/g, '');
+  return digits || null;
+}
+
+function normalizeStreetForSearch(value) {
+  return cleanCell(value)
+    .replace(/^r\.\s*/i, 'Rua ')
+    .replace(/^rua\s+/i, 'Rua ')
+    .replace(/^(?:av\.?|ave\.?|avenida)\s+/i, 'Avenida ')
+    .replace(/^rod\.\s*/i, 'Rodovia ')
+    .replace(/^estr\.\s*/i, 'Estrada ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function findLocationInAddress(address, fallback) {
+  const tokens = cleanCell(address).split(',').map(cleanCell).filter(Boolean);
+  let place = fallback.place;
+  let region = fallback.region;
+  let cutIndex = tokens.length;
+
+  tokens.forEach((token, index) => {
+    const suffix = token.match(/^(.+?)\s*-\s*([A-Za-z]{2})$/);
+    const tokenState = normalizeState(token);
+    const isKnownPlace = place && normalizeString(token).toUpperCase() === normalizeString(place).toUpperCase();
+    if (suffix && STATE_NAMES[suffix[2].toUpperCase()]) {
+      if (!place) place = suffix[1].trim();
+      if (!region) region = suffix[2].toUpperCase();
+      cutIndex = Math.min(cutIndex, index);
+    } else if (isKnownPlace) {
+      cutIndex = Math.min(cutIndex, index);
+    } else if (tokenState) {
+      if (!region) region = tokenState;
+      cutIndex = Math.min(cutIndex, index);
+    } else if (!place && index < tokens.length - 1 && /^[A-ZÀ-Ú\s.'-]+$/i.test(token) && normalizeState(tokens[index + 1])) {
+      place = token;
+      region = region || normalizeState(tokens[index + 1]);
+      cutIndex = Math.min(cutIndex, index);
     }
-  }
+  });
 
-  // Normalização do estado
-  let region = stateStr;
-  if (stateStr.length > 2) {
-    const norm = normalizeString(stateStr).toUpperCase();
-    const found = Object.entries(STATE_NAMES).find(([, name]) => name === norm);
-    region = found ? found[0] : stateStr.slice(0, 2);
-  }
+  return { place, region, addressTokens: tokens.slice(0, cutIndex) };
+}
 
+function splitRemainder(values) {
+  const parts = values
+    .flatMap((value) => cleanCell(value).split(/\s+-\s+/))
+    .map(cleanCell)
+    .filter(Boolean);
+  const complementParts = parts.filter((part) => COMPLEMENT_PATTERN.test(part) || /\bkm\s*\d+/i.test(part));
+  const neighborhoodParts = parts.filter((part) => !complementParts.includes(part) && !RURAL_PATTERN.test(part));
   return {
-    place: cityStr,
-    region: region,
+    complement: complementParts.join(', ') || null,
+    neighborhood: neighborhoodParts.join(', ') || null,
   };
 }
 
-/**
- * Identifica se uma string contém número com separador de milhar brasileiro (ex: 7.881 -> 7881).
- * Não deve alterar CEP, decimais, complementos ou anos.
- */
-function parseThousandHouseNumber(value) {
-  if (!value) return null;
-  const cleaned = cleanCell(value);
-
-  // Exemplo: 7.881 ou 1.234 isolado ou precedido por vírgula/espaço
-  const match = cleaned.match(/\b(\d{1,3})\.(\d{3})\b/);
-  if (match) {
-    return `${match[1]}${match[2]}`;
-  }
-
-  const pureDigits = cleaned.replace(/\D/g, '');
-  return pureDigits || null;
-}
-
-/**
- * Parser de Endereços Brasileiros
- * Interpreta logradouro, número do imóvel, complemento, bairro, cidade, UF, CEP.
- */
+/** Interpreta enderecos heterogeneos sem inventar componentes que nao existem. */
 function parseBrazilianAddress(rawAddress, rawCity = '', rawState = '', rawCountry = 'Brasil') {
   const originalAddress = cleanCell(rawAddress);
-  const cityState = normalizeCityAndState(rawCity, rawState);
+  const suppliedLocation = normalizeCityAndState(rawCity, rawState);
+  const postcodeMatch = originalAddress.match(/(?:CEP\s*:?\s*)?(\d{5}-?\d{3})/i);
+  const postcode = postcodeMatch ? postcodeMatch[1].replace('-', '') : null;
+  const textWithoutPostcode = originalAddress
+    .replace(/(?:CEP\s*:?\s*)?\d{5}-?\d{3}/gi, '')
+    .replace(/,?\s*(?:Brasil|Brazil)\s*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const location = findLocationInAddress(textWithoutPostcode, suppliedLocation);
+  const addressTokens = location.addressTokens;
+  const addressText = addressTokens.join(', ').trim();
+  const isRural = RURAL_PATTERN.test(addressText);
+  const hasNoNumber = NO_NUMBER_PATTERN.test(addressText);
+  const kmMatch = addressText.match(/\bkm\s*(\d+)\b/i);
 
   let street = '';
   let houseNumber = null;
-  let complement = null;
-  let neighborhood = null;
-  let postcode = null;
-  let isRural = false;
-  let hasNoNumber = false;
-  let km = null;
+  let remainder = [];
+  const first = addressTokens[0] || '';
+  const second = addressTokens[1] || '';
+  const trailingTokens = addressTokens.slice(2);
+  const firstTwo = second ? `${first}, ${second}` : first;
 
-  if (!originalAddress) {
-    return {
-      originalAddress,
-      street,
-      houseNumber,
-      complement,
-      neighborhood,
-      place: cityState.place,
-      region: cityState.region,
-      postcode,
-      country: cleanCell(rawCountry) || 'Brasil',
-      isRural,
-      hasNoNumber,
-      km,
-      normalizedSearchAddress: [cityState.place, cityState.region, rawCountry].filter(Boolean).join(', '),
-    };
-  }
-
-  // Extração de CEP se presente no texto do endereço
-  const cepMatch = originalAddress.match(/(?:CEP\s*:?\s*)?(\d{5}-?\d{3})/i);
-  if (cepMatch) {
-    postcode = cepMatch[1].replace('-', '');
-  }
-
-  let text = originalAddress
-    .replace(/(?:CEP\s*:?\s*)?\d{5}-?\d{3}/gi, '')
-    .replace(/,\s*Brasil$/i, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  // Verificar se é Rural / Estrada
-  if (/\b(?:zona rural|estrada|chacara|sitio|fazenda|km\s*\d+)\b/i.test(text)) {
-    isRural = true;
-  }
-
-  // Extrair KM se houver
-  const kmMatch = text.match(/\bkm\s*(\d+)\b/i);
-  if (kmMatch) {
-    km = kmMatch[1];
-  }
-
-  // Verificar S/N (sem número)
-  if (/\b(?:s\/n|sem numero|s\/nº|sn)\b/i.test(text)) {
-    hasNoNumber = true;
-  }
-
-  // Remover S/N para não confundir parser
-  let workingText = text.replace(/\b(?:s\/n|sem numero|s\/nº|sn)\b/gi, '').trim();
-
-  let extractedComplement = null;
-
-  // Tratar número com milhar ex: AVENIDA MARECHAL DEODORO, 7.881
-  const thousandMatch = workingText.match(/(.*?),?\s*(\d{1,3}\.\d{3})\b(.*)/i);
-  if (thousandMatch) {
-    street = thousandMatch[1].trim();
-    houseNumber = thousandMatch[2].replace('.', '');
-    const remainder = thousandMatch[3].trim();
-    if (remainder) {
-      extractedComplement = remainder.replace(/^[\s,-]+/, '');
-    }
+  if (isRural) {
+    street = first || addressText;
+    remainder = addressTokens.slice(1);
   } else {
-    // Tentar padrão tradicional: RUA ALGO, 123, COMPLEMENTO
-    const numberMatch = workingText.match(/^(.*?)[,\s]+(\d+)\b(.*)$/);
-    if (numberMatch && !isRural) {
-      street = numberMatch[1].trim();
-      houseNumber = numberMatch[2];
-      const remainder = numberMatch[3].trim();
-      if (remainder) {
-        extractedComplement = remainder.replace(/^[\s,-]+/, '');
-      }
+    const numbered = firstTwo.match(/^(.*?)(?:,|\s)+(\d{1,3}(?:\.\d{3})+|\d+)\b(?:[\s,-]+(.*))?$/i);
+    const trailingNumber = first.match(/^(.*?)[\s,]+(\d{1,3}(?:\.\d{3})+|\d+)\b(?:[\s,-]+(.*))?$/i);
+    const match = !hasNoNumber ? (numbered || trailingNumber) : null;
+    if (match) {
+      street = cleanCell(match[1]);
+      houseNumber = parseThousandHouseNumber(match[2]);
+      if (match[3]) remainder.push(match[3]);
+      remainder.push(...(numbered ? trailingTokens : addressTokens.slice(1)));
     } else {
-      street = workingText;
+      street = first || addressText;
+      remainder = addressTokens.slice(1);
     }
   }
 
-  // Limpeza de vírgulas trailing em rua
-  street = street.replace(/^[,\s]+|[,\s]+$/g, '');
-
-  if (extractedComplement) {
-    complement = extractedComplement;
-  }
-
-  // Se não foi identificado número e não é S/N / Rural, verificar se rua termina com dígitos
-  if (!houseNumber && !hasNoNumber && !isRural) {
-    const trailingNumMatch = street.match(/^(.*)\s+(\d+)$/);
-    if (trailingNumMatch) {
-      street = trailingNumMatch[1].trim();
-      houseNumber = trailingNumMatch[2];
-    }
-  }
-
-  // Normalização de abreviações para busca (ex: R. -> Rua, AV. -> Avenida)
-  let searchStreet = street
-    .replace(/^r\.\s+/i, 'Rua ')
-    .replace(/^rua\s+/i, 'Rua ')
-    .replace(/^(?:av\.|ave\.|avenida)\s+/i, 'Avenida ');
-
-  // Montagem do endereço de busca estruturado
-  const parts = [
-    searchStreet,
+  street = normalizeStreetForSearch(street.replace(NO_NUMBER_PATTERN, '').replace(/[\s,]+$/g, ''));
+  const remainderParts = splitRemainder(remainder);
+  const country = cleanCell(rawCountry) || 'Brasil';
+  const normalizedSearchAddress = [
+    street,
     houseNumber,
-    complement,
-    cityState.place,
-    cityState.region,
+    remainderParts.complement,
+    remainderParts.neighborhood,
+    location.place,
+    location.region,
     postcode,
-    cleanCell(rawCountry) || 'Brasil',
-  ].filter(Boolean);
+    country,
+  ].filter(Boolean).join(', ');
 
   return {
     originalAddress,
-    street: searchStreet || street,
-    houseNumber: houseNumber || null,
-    complement: complement || null,
-    neighborhood: neighborhood || null,
-    place: cityState.place,
-    region: cityState.region,
-    postcode: postcode || null,
-    country: cleanCell(rawCountry) || 'Brasil',
+    street,
+    houseNumber,
+    complement: remainderParts.complement,
+    neighborhood: remainderParts.neighborhood,
+    place: location.place,
+    region: location.region,
+    postcode,
+    country,
+    countryCode: normalizeCountryCode(country),
     isRural,
     hasNoNumber: hasNoNumber || (!houseNumber && !isRural),
-    km: km || null,
-    normalizedSearchAddress: parts.join(', '),
+    km: kmMatch?.[1] || null,
+    normalizedSearchAddress,
   };
 }
 
-/**
- * Gera a Chave Canônica do Endereço para Cache e Deduplicação.
- * Garante que:
- *   canonicalKey("Avenida Florestal", "370", "Campo Grande", "MS")
- *   != canonicalKey("Avenida Três Barras", "370", "Campo Grande", "MS")
- */
-function canonicalKey(street, houseNumber, place, region, postcode = '', country = 'BR') {
-  const normStreet = normalizeString(street).toLowerCase();
-  const normNumber = parseThousandHouseNumber(houseNumber) || cleanCell(houseNumber).toLowerCase();
-  const normPlace = normalizeString(place).toLowerCase();
-  const normRegion = normalizeString(region).toUpperCase();
-  const normPostcode = cleanCell(postcode).replace(/\D/g, '');
-  const normCountry = normalizeString(country).toUpperCase();
-
+/** A chave usa o endereco completo e a versao do algoritmo. */
+function canonicalKey(street, houseNumber, place, region, postcode = '', country = 'BR', neighborhood = '') {
+  const norm = (value) => normalizeString(value).toLowerCase();
+  const normNumber = parseThousandHouseNumber(houseNumber) || norm(houseNumber);
   return [
     `v${GEOCODING_ALGORITHM_VERSION}`,
-    normStreet,
+    norm(street),
     normNumber,
-    normPlace,
-    normRegion,
-    normPostcode,
-    normCountry,
+    norm(neighborhood),
+    norm(place),
+    normalizeString(region).toUpperCase(),
+    cleanCell(postcode).replace(/\D/g, ''),
+    normalizeCountryCode(country),
   ].join('|');
 }
 
@@ -247,6 +219,8 @@ module.exports = {
   canonicalKey,
   cleanCell,
   normalizeCityAndState,
+  normalizeCountryCode,
+  normalizeState,
   normalizeString,
   parseBrazilianAddress,
   parseThousandHouseNumber,

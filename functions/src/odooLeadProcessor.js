@@ -11,6 +11,7 @@ const {
 const {
   calculateHaversineDistanceMeters,
   classifyDistance,
+  compareReverseAddress,
   validateMapboxResponse,
 } = require('./mapboxGeocoder');
 
@@ -513,7 +514,8 @@ async function enrichCoordinates(record, geocodeClient, audit, enabled) {
     parsedAddress.place,
     parsedAddress.region,
     parsedAddress.postcode,
-    parsedAddress.country
+    parsedAddress.country,
+    parsedAddress.neighborhood
   );
 
   record.__meta.canonicalKey = key;
@@ -584,6 +586,15 @@ async function enrichCoordinates(record, geocodeClient, audit, enabled) {
     }
 
     const validation = validateMapboxResponse(result.rawFeature, parsedAddress);
+    let reverseMatch = { checked: false, matches: null, reason: 'Reverse geocoding indisponivel.' };
+    if (typeof geocodeClient.reverseGeocode === 'function') {
+      try {
+        const reverse = await geocodeClient.reverseGeocode(result.latitude, result.longitude);
+        reverseMatch = compareReverseAddress(parsedAddress, reverse);
+      } catch (error) {
+        // A ausencia do reverse impede confirmacao automatica, mas preserva a proposta para revisao.
+      }
+    }
 
     // Salvar valores propostos
     record.__meta.geocodedLatitude = result.latitude;
@@ -592,6 +603,34 @@ async function enrichCoordinates(record, geocodeClient, audit, enabled) {
     record.__meta.navigationLongitude = result.navigationLongitude;
     record.__meta.coordinatePrecisionLevel = result.accuracy || 'unknown';
     record.__meta.providerReturnedAddress = result.label;
+    record.__meta.geocoding = {
+      provider: 'mapbox_geocoding_v6',
+      algorithmVersion: GEOCODING_ALGORITHM_VERSION,
+      geocodedAt: Date.now(),
+      originalAddress: parsedAddress.originalAddress,
+      normalizedAddress: parsedAddress.normalizedSearchAddress,
+      parsedAddress,
+      query: {
+        street: parsedAddress.street || null,
+        houseNumber: parsedAddress.houseNumber || null,
+        neighborhood: parsedAddress.neighborhood || null,
+        place: parsedAddress.place || null,
+        region: parsedAddress.region || null,
+        postcode: parsedAddress.postcode || null,
+        country: parsedAddress.countryCode || 'BR',
+      },
+      providerAddress: result.label || '',
+      featureType: result.featureType || 'unknown',
+      accuracy: result.accuracy || 'unknown',
+      confidence: result.confidence || 'unknown',
+      matchCode: result.matchCode || null,
+      geocodedCoordinate: { latitude: result.latitude, longitude: result.longitude },
+      navigationCoordinate: { latitude: result.navigationLatitude, longitude: result.navigationLongitude },
+      entranceCoordinate: result.entranceLatitude !== null && result.entranceLongitude !== null
+        ? { latitude: result.entranceLatitude, longitude: result.entranceLongitude }
+        : null,
+      reverseMatch,
+    };
 
     // Calcular diferença Haversine em relação à coordenada antiga se houver
     if (isValidCoordinates(record.latitude, record.longitude)) {
@@ -605,20 +644,37 @@ async function enrichCoordinates(record, geocodeClient, audit, enabled) {
       record.__meta.previousLongitude = Number(record.longitude);
       record.__meta.distanceFromPreviousMeters = distanceMeters;
       record.__meta.distanceClassification = classifyDistance(distanceMeters);
+      record.__meta.geocoding.previousCoordinate = {
+        latitude: Number(record.latitude),
+        longitude: Number(record.longitude),
+      };
+      record.__meta.geocoding.distanceFromPreviousMeters = distanceMeters;
     }
 
-    if (validation.accepted) {
+    if (validation.accepted && reverseMatch.matches === true) {
       record.latitude = result.latitude;
       record.longitude = result.longitude;
       record.__meta.coordinateStatus = 'confirmed';
       record.__meta.coordinateSource = 'Mapbox Geocoding v6';
+      record.__meta.geocoding.status = 'confirmed';
+      record.__meta.geocoding.reason = validation.reason;
       appendSource(record, 'Mapbox Geocoding v6');
       updateResearchStatus(record, 'confirmed');
       audit.push(createAudit(record, 'geocoding', 'FILLED', `Coordenadas confirmadas para ${result.label}.`, ['latitude', 'longitude'], 'Mapbox Geocoding v6'));
     } else {
-      record.__meta.coordinateStatus = validation.status;
+      record.__meta.coordinateStatus = reverseMatch.checked && reverseMatch.matches === false
+        ? 'reverse_mismatch'
+        : validation.status === 'confirmed'
+          ? 'needs_review'
+          : validation.status;
+      record.__meta.geocoding.status = record.__meta.coordinateStatus;
+      record.__meta.geocoding.reason = reverseMatch.checked && reverseMatch.matches === false
+        ? reverseMatch.reason
+        : validation.accepted
+          ? 'Reverse geocoding nao confirmou o endereco; requer revisao humana.'
+          : validation.reason;
       updateResearchStatus(record, 'needs_review');
-      audit.push(createAudit(record, 'geocoding', 'REJECTED', validation.reason, ['latitude', 'longitude'], 'Mapbox Geocoding v6'));
+      audit.push(createAudit(record, 'geocoding', 'REJECTED', record.__meta.geocoding.reason, ['latitude', 'longitude'], 'Mapbox Geocoding v6'));
     }
   } catch (error) {
     record.__meta.coordinateStatus = 'error';
@@ -736,6 +792,19 @@ function buildFirebaseCustomer(record, { jobId, importedBy, importedAt }) {
     coordinateStatus: meta.coordinateStatus || 'missing',
     coordinateSource: meta.coordinateSource || null,
     canonicalKey: meta.canonicalKey || null,
+    normalizedAddress: meta.parsedAddress?.normalizedSearchAddress || null,
+    originalAddress: meta.parsedAddress?.originalAddress || cleanCell(record['Deal - Address']),
+    parsedAddress: meta.parsedAddress || null,
+    geocoding: meta.geocoding || {
+      provider: meta.coordinateSource || 'legacy',
+      algorithmVersion: GEOCODING_ALGORITHM_VERSION,
+      status: meta.coordinateStatus || (hasCoordinates ? 'legacy_unverified' : 'missing_coordinate'),
+      originalAddress: cleanCell(record['Deal - Address']),
+      normalizedAddress: meta.parsedAddress?.normalizedSearchAddress || null,
+      sourceCoordinate: hasCoordinates ? { latitude: Number(record.latitude), longitude: Number(record.longitude) } : null,
+      geocodedCoordinate: null,
+      navigationCoordinate: hasCoordinates ? { latitude: Number(record.latitude), longitude: Number(record.longitude) } : null,
+    },
 
     country: cleanCell(record.Country) || 'Brasil',
     active: true,
