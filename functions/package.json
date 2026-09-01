@@ -7,7 +7,7 @@
     "node": "20"
   },
   "scripts": {
-    "lint": "node --check index.js && node --check src/odooLeadProcessor.js",
+    "lint": "node --check index.js && node --check src/coordinateReview.js && node --check src/firebaseSafeData.js && node --check src/odooLeadProcessor.js && node --check src/odooClient.js && node --check src/odooConnectionVerifier.js && node --check src/odooVisitSyncService.js && node --check src/revalidationService.js",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {

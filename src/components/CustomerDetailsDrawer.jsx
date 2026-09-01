@@ -14,14 +14,18 @@ import { currencyBRL, formatDateTime } from '../utils/formatters';
 import { coordinatesFromCustomer, formatDistanceMeters } from '../utils/locationDistance';
 import { statusLabel } from '../utils/customerVisits';
 import { attendanceDurationSeconds } from '../utils/routeAttendances';
+import { customerPrimaryName } from '../utils/customerDisplay';
 
 const FIELD_GROUPS = [
   {
     title: 'Identificacao',
     fields: [
       { label: 'ID do cadastro', keys: ['id'] },
-      { label: 'ID externo', keys: ['externalId'] },
-      { label: 'Empresa', keys: ['clientName', 'opportunity'] },
+      { label: 'Codigo Minum', keys: ['minumCode', 'externalId'] },
+      { label: 'ID tecnico Odoo', keys: ['odooLeadId'] },
+      { label: 'ID externo Odoo', keys: ['odooExternalId'] },
+      { label: 'Empresa / oportunidade', keys: ['opportunity', 'name'] },
+      { label: 'Contato principal', keys: ['clientName', 'contactName'] },
       { label: 'CNPJ / CPF', keys: ['cnpjCpf', 'cpfCnpj'] },
     ],
   },
@@ -77,7 +81,7 @@ export default function CustomerDetailsDrawer({
   const extraFields = Object.entries(customer)
     .filter(([key, value]) => !KNOWN_FIELDS.has(key) && hasValue(value) && key !== 'visits')
     .sort(([first], [second]) => first.localeCompare(second, 'pt-BR'));
-  const title = customer.name || customer.clientName || customer.opportunity || customer.id;
+  const title = customerPrimaryName(customer);
 
   return (
     <OperationalDetailsDrawer

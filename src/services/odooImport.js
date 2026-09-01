@@ -1,10 +1,14 @@
 import XLSX from 'xlsx-js-style';
 import { httpsCallable } from 'firebase/functions';
-import { cloudFunctions } from './firebase';
+import { auth, cloudFunctions } from './firebase';
 import { excelHeaders, normalizeCustomer } from '../utils/helpers';
 
 const processOdooLeadImport = httpsCallable(cloudFunctions, 'processOdooLeadImport', { timeout: 570000 });
 const commitOdooLeadImport = httpsCallable(cloudFunctions, 'commitOdooLeadImport', { timeout: 210000 });
+const reviewOdooImportCoordinate = httpsCallable(cloudFunctions, 'reviewOdooImportCoordinate', { timeout: 70000 });
+const verifyOdooIntegration = httpsCallable(cloudFunctions, 'verifyOdooIntegration', { timeout: 70000 });
+const createOdooIntegrationTestActivity = httpsCallable(cloudFunctions, 'createOdooIntegrationTestActivity', { timeout: 70000 });
+const processSingleOdooVisitEvent = httpsCallable(cloudFunctions, 'processSingleOdooVisitEvent', { timeout: 70000 });
 
 function normalizeHeader(value) {
   return String(value || '')
@@ -32,16 +36,20 @@ export function inspectSpreadsheet(buffer) {
     defval: '',
   })[0] || [];
   const normalizedHeaders = new Set(headers.map(normalizeHeader));
-  const odooRequiredHeaders = [
+  const legacyOdooHeaders = [
     'oportunidade',
     'codigodosistemaminum',
     'marcadoresnomedomarcador',
   ];
+  // Assinatura da exportacao direta de crm.lead do Odoo 18. Ela chega sem
+  // coordenadas e sem codigo Minum, mas o backend a adapta automaticamente.
+  const rawOdooHeaders = ['id', 'name', 'street', 'tagids'];
 
   return {
     workbook,
     worksheet,
-    isRawOdooExport: odooRequiredHeaders.every((header) => normalizedHeaders.has(header)),
+    isRawOdooExport: legacyOdooHeaders.every((header) => normalizedHeaders.has(header))
+      || rawOdooHeaders.every((header) => normalizedHeaders.has(header)),
   };
 }
 
@@ -56,7 +64,46 @@ export async function createOdooImportPreview(file, options) {
 }
 
 export async function confirmOdooImport(jobId, mode) {
+  const user = auth.currentUser;
+  if (!user) {
+    const error = new Error('Sua sessao expirou. Entre novamente para confirmar a importacao.');
+    error.code = 'unauthenticated';
+    throw error;
+  }
+
+  // Garante que a chamada callable use um ID token vigente, inclusive quando
+  // a revisao da planilha demorou mais que o tempo normal da sessao.
+  await user.getIdToken(true);
   const response = await commitOdooLeadImport({ jobId, mode });
+  return response.data;
+}
+
+/** Atualiza somente a previa temporaria; nenhum cliente e gravado nesta etapa. */
+export async function reviewOdooImportCoordinatePreview(jobId, review) {
+  const user = auth.currentUser;
+  if (!user) {
+    const error = new Error('Sua sessao expirou. Entre novamente para revisar coordenadas.');
+    error.code = 'unauthenticated';
+    throw error;
+  }
+  await user.getIdToken(true);
+  const response = await reviewOdooImportCoordinate({ jobId, ...review });
+  return response.data;
+}
+
+export async function verifyOdooConnection() {
+  const response = await verifyOdooIntegration();
+  return response.data;
+}
+
+export async function createOdooTestActivity() {
+  const response = await createOdooIntegrationTestActivity();
+  return response.data;
+}
+
+/** Envia somente o feedback selecionado pelo administrador para o Odoo. */
+export async function processSingleOdooFeedback({ routeId, stopId, eventId }) {
+  const response = await processSingleOdooVisitEvent({ routeId, stopId, eventId });
   return response.data;
 }
 
@@ -86,10 +133,23 @@ function csvValue(value) {
 }
 
 export function downloadOdooAudit(audit) {
-  const headers = ['Linha', 'ID', 'Oportunidade', 'Etapa', 'Status', 'Fonte', 'Campos', 'Detalhes'];
+  const headers = [
+    'Linha',
+    'Codigo Minum',
+    'ID tecnico Odoo',
+    'ID externo Odoo',
+    'Oportunidade',
+    'Etapa',
+    'Status',
+    'Fonte',
+    'Campos',
+    'Detalhes',
+  ];
   const rows = (audit || []).map((entry) => [
     entry.row,
-    entry.id,
+    entry.minumCode || entry.id,
+    entry.odooLeadId,
+    entry.odooExternalId,
     entry.opportunity,
     entry.stage,
     entry.status,

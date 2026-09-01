@@ -14,6 +14,7 @@ import {
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import { useMemo, useState } from 'react';
 import { currencyBRL } from '../utils/formatters';
+import { customerContactName, customerPrimaryName } from '../utils/customerDisplay';
 import EmptyState from './EmptyState';
 
 export default function CustomersTable({ customers, onCustomerSelect, selectedCustomerId }) {
@@ -63,13 +64,18 @@ export default function CustomersTable({ customers, onCustomerSelect, selectedCu
                 }}
                 tabIndex={0}
                 role="button"
-                aria-label={`Ver detalhes de ${customer.name || customer.clientName || customer.id}`}
+                aria-label={`Ver detalhes de ${customerPrimaryName(customer)}`}
                 sx={{ cursor: onCustomerSelect ? 'pointer' : 'default' }}
               >
                 <TableCell>
                   <Typography variant="body2" fontWeight={700}>
-                    {customer.name}
+                    {customerPrimaryName(customer)}
                   </Typography>
+                  {customerContactName(customer) && (
+                    <Typography variant="caption" color="text.secondary" display="block">
+                      Contato: {customerContactName(customer)}
+                    </Typography>
+                  )}
                   <Typography variant="caption" color="text.secondary">
                     {customer.id}
                   </Typography>
@@ -82,7 +88,7 @@ export default function CustomersTable({ customers, onCustomerSelect, selectedCu
                 <TableCell align="right">
                   <Tooltip title="Ver todos os dados do cliente">
                     <IconButton
-                      aria-label={`Ver detalhes de ${customer.name || customer.clientName || customer.id}`}
+                      aria-label={`Ver detalhes de ${customerPrimaryName(customer)}`}
                       onClick={(event) => {
                         event.stopPropagation();
                         onCustomerSelect?.(customer);

@@ -12,7 +12,8 @@ import {
   update,
 } from 'firebase/database';
 import { createUserWithEmailAndPassword, deleteUser, signOut } from 'firebase/auth';
-import { auth, database, provisioningAuth } from './firebase';
+import { httpsCallable } from 'firebase/functions';
+import { auth, cloudFunctions, database, provisioningAuth } from './firebase';
 
 const dbRef = ref(database);
 
@@ -42,12 +43,14 @@ export async function importCustomers(customers, mode = 'merge') {
 
   const updates = {};
   customers.forEach((customer) => {
-    const key = toFirebaseKey(customer.externalId || customer.id);
+    const minumCode = customer.minumCode || customer.externalId || customer.id;
+    const key = toFirebaseKey(minumCode);
 
     updates[`customers/${key}`] = {
       ...toFirebaseCustomer(customer),
       id: key,
-      externalId: customer.externalId || customer.id,
+      externalId: minumCode,
+      minumCode,
       importedAt: serverTimestamp(),
     };
   });
@@ -82,10 +85,15 @@ async function removePlaceholderCustomers() {
 }
 
 function toFirebaseCustomer(customer) {
+  const opportunity = String(customer.opportunity || '').trim();
+  const clientName = String(customer.clientName || '').trim();
   return {
-    opportunity: customer.opportunity,
+    opportunity: opportunity || null,
     cpfCnpj: customer.cpfCnpj,
     cnpjCpf: customer.cnpjCpf,
+    minumCode: customer.minumCode || customer.externalId || customer.id,
+    odooLeadId: customer.odooLeadId ?? null,
+    odooExternalId: customer.odooExternalId ?? null,
     dealAddress: customer.dealAddress,
     address: customer.address,
     email: customer.email,
@@ -108,8 +116,8 @@ function toFirebaseCustomer(customer) {
     origem: customer.origem,
     pipelineStage: customer.pipelineStage,
     status: customer.status,
-    name: customer.name,
-    clientName: customer.clientName,
+    name: opportunity || customer.name || clientName || customer.id,
+    clientName: clientName || null,
     latitude: customer.latitude,
     longitude: customer.longitude,
     country: customer.country,
@@ -385,7 +393,10 @@ export async function createSharedRouteAssignment({ seller, name, dueDate, targe
       routeId,
       customerId: String(customer.id || customerKey),
       customerExternalId: String(customer.externalId || customerKey),
-      customerName: customer.name || customer.clientName || customer.opportunity || customerKey,
+      minumCode: customer.minumCode || customer.externalId || customerKey,
+      odooLeadId: customer.odooLeadId ?? null,
+      odooExternalId: customer.odooExternalId ?? null,
+      customerName: customer.opportunity || customer.name || customer.clientName || customerKey,
       clientName: customer.clientName || null,
       opportunity: customer.opportunity || null,
       cnpjCpf: customer.cnpjCpf || customer.cpfCnpj || null,
@@ -416,6 +427,231 @@ export async function createSharedRouteAssignment({ seller, name, dueDate, targe
 
   await update(ref(database), updates);
   return { id: routeId, ...route };
+}
+
+/**
+ * Atualiza uma rota atribuida sem separar a base central da copia recebida pelo
+ * vendedor. Paradas com atendimento iniciado nunca sao trocadas, removidas ou
+ * reordenadas: o historico de visita continua auditavel.
+ */
+export async function updateSharedRouteAssignment({
+  route,
+  seller,
+  name,
+  dueDate,
+  targetCompletionPercent,
+  notes,
+  customers,
+  estimate,
+}) {
+  if (!auth.currentUser) throw new Error('Sua sessao expirou. Entre novamente.');
+
+  const routeId = String(route?.id || '').trim();
+  if (!routeId) throw new Error('Nao foi possivel identificar a rota a editar.');
+  if (!seller?.id) throw new Error('Selecione o vendedor responsavel.');
+  if (!dueDate) throw new Error('Informe a data para cumprimento da rota.');
+  if (!Array.isArray(customers) || customers.length === 0) {
+    throw new Error('Selecione pelo menos um cliente para a rota.');
+  }
+  if (customers.length > 24) throw new Error('Uma rota compartilhada aceita no maximo 24 clientes.');
+
+  const routeSnapshot = await get(ref(database, `plannedRoutes/${routeId}`));
+  if (!routeSnapshot.exists()) throw new Error('Esta rota nao existe mais no Firebase. Atualize a pagina e tente novamente.');
+
+  const currentRoute = { id: routeId, ...routeSnapshot.val() };
+  const currentSellerUid = String(currentRoute.sellerUid || currentRoute.vendedor || currentRoute.uid || '').trim();
+  const [stopsSnapshot, sharedRouteSnapshot] = await Promise.all([
+    get(ref(database, `plannedRouteStops/${routeId}`)),
+    currentSellerUid ? get(ref(database, `sharedRoutesBySeller/${currentSellerUid}/${routeId}`)) : Promise.resolve(null),
+  ]);
+
+  const currentStops = stopsSnapshot?.exists() ? stopsSnapshot.val() || {} : {};
+  const currentSharedRoute = sharedRouteSnapshot?.exists() ? sharedRouteSnapshot.val() || {} : null;
+  const existingStopEntries = Object.entries(currentStops);
+  const existingStopsByCustomer = new Map(
+    existingStopEntries
+      .map(([stopId, stop]) => [routeStopCustomerKey(stop), { stopId, stop }])
+      .filter(([customerKey]) => Boolean(customerKey)),
+  );
+  const requestedCustomerKeys = customers.map(routeCustomerKey);
+
+  if (requestedCustomerKeys.some((customerKey) => !customerKey)) {
+    throw new Error('Todos os clientes selecionados precisam ter um identificador valido.');
+  }
+  if (new Set(requestedCustomerKeys).size !== requestedCustomerKeys.length) {
+    throw new Error('Um mesmo cliente nao pode aparecer duas vezes na mesma rota.');
+  }
+
+  const currentCustomerOrder = existingStopEntries
+    .sort(([, first], [, second]) => Number(first.order ?? first.ordem ?? 0) - Number(second.order ?? second.ordem ?? 0))
+    .map(([, stop]) => routeStopCustomerKey(stop))
+    .filter(Boolean);
+  const stopsChanged = !sameCustomerOrder(currentCustomerOrder, requestedCustomerKeys);
+  const sellerChanged = currentSellerUid && currentSellerUid !== String(seller.id);
+  const hasRecordedExecution = routeHasRecordedExecution(currentRoute, Object.values(currentStops));
+
+  if (hasRecordedExecution && (stopsChanged || sellerChanged)) {
+    throw new Error('Esta rota ja possui check-in, feedback ou navegacao registrada. Para preservar a auditoria, somente os detalhes administrativos podem ser editados.');
+  }
+
+  customers.forEach((customer) => {
+    const isExistingStop = existingStopsByCustomer.has(routeCustomerKey(customer));
+    if (!isExistingStop && !hasValidCoordinates(customer)) {
+      throw new Error(`O cliente ${customer.opportunity || customer.name || customer.id} precisa ter coordenadas validas antes de entrar na rota.`);
+    }
+  });
+
+  const target = Math.min(100, Math.max(1, Number(targetCompletionPercent) || 90));
+  const routeName = String(name || '').trim() || `Rota ${dueDate}`;
+  const routePatch = {
+    id: routeId,
+    name: routeName,
+    sellerUid: seller.id,
+    sellerName: seller.name || seller.displayName || seller.email || seller.id,
+    sellerEmail: seller.email || null,
+    state: seller.state || currentRoute.state || null,
+    dueDate,
+    targetCompletionPercent: target,
+    targetCompletedStops: Math.ceil((customers.length * target) / 100),
+    assignmentNotes: String(notes || '').trim() || null,
+    stopCount: customers.length,
+    updatedAt: serverTimestamp(),
+    lastEditedAt: serverTimestamp(),
+    lastEditedByUid: auth.currentUser.uid,
+    lastEditedByName: auth.currentUser.displayName || auth.currentUser.email || auth.currentUser.uid,
+  };
+
+  if (stopsChanged) {
+    routePatch.estimatedDistanceMeters = estimate?.distanceMeters ?? null;
+    routePatch.estimatedDurationSeconds = estimate?.durationSeconds ?? null;
+  }
+
+  const nextRoute = { ...currentRoute, ...routePatch };
+  const updates = {
+    [`plannedRoutes/${routeId}`]: nextRoute,
+  };
+
+  let nextStops = currentStops;
+  let nextSharedStops = currentSharedRoute?.stops || currentStops;
+  if (stopsChanged) {
+    nextStops = {};
+    nextSharedStops = {};
+
+    customers.forEach((customer, index) => {
+      const customerKey = routeCustomerKey(customer);
+      const existing = existingStopsByCustomer.get(customerKey);
+      const stopId = existing?.stopId || `stop_${String(index + 1).padStart(3, '0')}_${toFirebaseKey(customerKey)}`;
+      const nextStop = buildRouteStop({
+        currentStop: existing?.stop,
+        customer,
+        routeId,
+        seller,
+        stopId,
+        order: index + 1,
+      });
+      const mirroredStop = currentSharedRoute?.stops?.[stopId];
+
+      nextStops[stopId] = nextStop;
+      nextSharedStops[stopId] = mirroredStop
+        ? { ...nextStop, ...mirroredStop, ...nextStop, attendances: mirroredStop.attendances || nextStop.attendances }
+        : nextStop;
+      updates[`plannedRouteStops/${routeId}/${stopId}`] = nextStop;
+    });
+
+    existingStopEntries.forEach(([stopId]) => {
+      if (!nextStops[stopId]) updates[`plannedRouteStops/${routeId}/${stopId}`] = null;
+    });
+  }
+
+  const isSharedRoute = Boolean(currentSharedRoute)
+    || currentRoute.assignmentType === 'shared'
+    || currentRoute.source === 'admin_assignment';
+
+  if (isSharedRoute) {
+    updates[`sharedRoutesBySeller/${seller.id}/${routeId}`] = {
+      ...(currentSharedRoute || currentRoute),
+      ...nextRoute,
+      stops: nextSharedStops,
+    };
+
+    if (currentSellerUid && currentSellerUid !== String(seller.id)) {
+      updates[`sharedRoutesBySeller/${currentSellerUid}/${routeId}`] = null;
+    }
+  }
+
+  await update(ref(database), updates);
+  return { ...nextRoute, stops: nextStops };
+}
+
+function buildRouteStop({ currentStop = {}, customer, routeId, seller, stopId, order }) {
+  const customerKey = routeCustomerKey(customer);
+  return {
+    ...currentStop,
+    id: stopId,
+    routeId,
+    customerId: String(customer.id || customerKey),
+    customerExternalId: String(customer.externalId || customerKey),
+    minumCode: customer.minumCode || customer.externalId || customerKey,
+    odooLeadId: customer.odooLeadId ?? currentStop.odooLeadId ?? null,
+    odooExternalId: customer.odooExternalId ?? currentStop.odooExternalId ?? null,
+    customerName: customer.opportunity || customer.name || customer.clientName || customerKey,
+    clientName: customer.clientName || null,
+    opportunity: customer.opportunity || customer.name || null,
+    cnpjCpf: customer.cnpjCpf || customer.cpfCnpj || null,
+    address: customer.address || customer.dealAddress || null,
+    city: customer.city || null,
+    state: customer.state || seller.state || currentStop.state || null,
+    phone: customer.phone || null,
+    email: customer.email || null,
+    segment: customer.segment || null,
+    pipelineStage: customer.pipelineStage || customer.status || null,
+    expectedRevenue: customer.expectedRevenue || null,
+    latitude: Number(customer.latitude),
+    longitude: Number(customer.longitude),
+    order,
+    status: currentStop.status || 'assigned',
+    timestamp: currentStop.timestamp ?? serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+}
+
+function routeHasRecordedExecution(route, stops) {
+  const routeStatus = String(route?.status || '').trim().toLowerCase();
+  if (['in_progress', 'completed', 'concluida', 'not_completed'].includes(routeStatus)) return true;
+
+  return stops.some((stop) => {
+    const status = String(stop?.status || stop?.result || '').trim().toLowerCase();
+    return Boolean(
+      stop?.checkInAt
+      || stop?.checkOutAt
+      || stop?.feedbackAt
+      || stop?.visitedAt
+      || stop?.arrivedAt
+      || ['visited', 'not_visited', 'in_progress', 'awaiting_feedback'].includes(status)
+      || Object.keys(stop?.attendances || {}).length,
+    );
+  });
+}
+
+function sameCustomerOrder(first, second) {
+  return first.length === second.length && first.every((customerKey, index) => customerKey === second[index]);
+}
+
+function routeCustomerKey(customer) {
+  return String(customer?.externalId || customer?.minumCode || customer?.id || '').trim();
+}
+
+function routeStopCustomerKey(stop) {
+  return String(stop?.customerExternalId || stop?.minumCode || stop?.customerId || '').trim();
+}
+
+/** Corrige cadastros legados cujo nome principal foi salvo como contato. */
+export async function normalizeCustomerPrimaryNames() {
+  if (!auth.currentUser) throw new Error('Sua sessao expirou. Entre novamente para atualizar os nomes.');
+  await auth.currentUser.getIdToken(true);
+  const callable = httpsCallable(cloudFunctions, 'normalizeCustomerPrimaryNames', { timeout: 120000 });
+  const response = await callable();
+  return response.data;
 }
 
 /**

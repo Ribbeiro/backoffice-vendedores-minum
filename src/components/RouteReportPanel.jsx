@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Box,
@@ -50,7 +50,14 @@ const statusOptions = [
 ];
 
 /** Painel de filtros e exportacao para transformar o historico em relatorios de gestao. */
-export default function RouteReportPanel({ customers, routes, routeStops, users, visitEvents }) {
+export default function RouteReportPanel({
+  customers,
+  routes,
+  routeStops,
+  users,
+  visitEvents,
+  onFilteredRoutesChange,
+}) {
   const [filters, setFilters] = useState(initialFilters);
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState(null);
@@ -59,6 +66,11 @@ export default function RouteReportPanel({ customers, routes, routeStops, users,
     [customers, routes, routeStops, users, visitEvents, filters],
   );
   const summary = report.summary;
+
+  // O historico visivel usa o mesmo recorte que alimenta os indicadores e o Excel.
+  useEffect(() => {
+    onFilteredRoutesChange?.(report.routes);
+  }, [onFilteredRoutesChange, report.routes]);
 
   function updateFilter(field, value) {
     setFilters((current) => ({ ...current, [field]: value }));
@@ -105,7 +117,7 @@ export default function RouteReportPanel({ customers, routes, routeStops, users,
               <Typography id="relatorios-title" variant="h6">Relatorios gerenciais</Typography>
             </Stack>
             <Typography variant="body2" color="text.secondary">
-              Filtre o historico e gere uma planilha organizada com resumo executivo, rotas, visitas e desempenho por vendedor.
+              Filtre o historico para atualizar as rotas exibidas abaixo e gerar uma planilha com o mesmo recorte.
             </Typography>
             <MinumLine sx={{ mt: 0.9 }} />
           </Stack>

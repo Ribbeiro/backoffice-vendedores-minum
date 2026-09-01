@@ -11,6 +11,7 @@ import {
   Divider,
   Drawer,
   FormControl,
+  FormControlLabel,
   Grid,
   IconButton,
   InputLabel,
@@ -18,6 +19,7 @@ import {
   Paper,
   Select,
   Stack,
+  Switch,
   Table,
   TableBody,
   TableCell,
@@ -44,7 +46,7 @@ function auditErrorMessage(error) {
   const code = String(error?.code || '').toLowerCase();
   const message = String(error?.message || '').toLowerCase();
   if (code.includes('internal') || code.includes('unavailable') || message.includes('internal')) {
-    return 'A auditoria ainda não está disponível neste projeto Firebase. Ela precisa de Cloud Functions publicadas para processar endereços com segurança. O deploy está bloqueado enquanto o projeto permanecer no plano Spark.';
+    return 'Nao foi possivel executar a auditoria agora. Verifique sua conexao e tente novamente; se persistir, envie este horario ao suporte tecnico.';
   }
   return error?.message || 'Não foi possível processar a auditoria de coordenadas.';
 }
@@ -53,6 +55,7 @@ const FILTERS = [
   ['ALL', 'Todos'],
   ['APPROVAL_ELIGIBLE', 'Prontos para aprovação'],
   ['CONFIRMED', 'Confirmados'],
+  ['PRESERVED', 'Preservadas sem nova consulta'],
   ['NEEDS_REVIEW', 'Exigem revisão'],
   ['POSTAL_CENTROID', 'Centroide de CEP/Rua'],
   ['DUPLICATE_COLLISION', 'Coordenada duplicada'],
@@ -82,6 +85,8 @@ function mergeResults(current, incoming) {
 
 function statusChip(item) {
   const status = item.coordinateStatus || 'unknown';
+  if (item.reviewLocked) return <Chip icon={<CheckCircleIcon />} color="success" size="small" label="PRESERVADA" />;
+  if (status === 'manual_confirmed') return <Chip icon={<CheckCircleIcon />} color="success" size="small" label="CONFIRMADA MANUALMENTE" />;
   if (item.reviewStatus === 'approved') return <Chip icon={<CheckCircleIcon />} color="success" size="small" label="APROVADA" />;
   if (item.approvalEligible) return <Chip icon={<FactCheckOutlinedIcon />} color="success" size="small" label="VALIDADA" />;
   if (status === 'reverse_mismatch' || status === 'source_conflict') return <Chip color="error" size="small" label={status.replaceAll('_', ' ')} />;
@@ -92,8 +97,9 @@ function statusChip(item) {
 function matchesFilter(item, filter) {
   switch (filter) {
     case 'APPROVAL_ELIGIBLE': return item.approvalEligible && item.reviewStatus !== 'approved';
-    case 'CONFIRMED': return item.coordinateStatus === 'confirmed';
-    case 'NEEDS_REVIEW': return item.coordinateStatus === 'needs_review';
+    case 'CONFIRMED': return item.reviewLocked || ['confirmed', 'manual_confirmed'].includes(item.coordinateStatus);
+    case 'PRESERVED': return item.reviewLocked;
+    case 'NEEDS_REVIEW': return !item.reviewLocked && item.coordinateStatus === 'needs_review';
     case 'POSTAL_CENTROID': return item.possiblePostalCentroid || item.coordinateStatus === 'postal_or_street_centroid_suspected';
     case 'DUPLICATE_COLLISION': return item.duplicateCoordinateDistinctAddress;
     case 'REVERSE_MISMATCH': return item.reverseMismatch || item.coordinateStatus === 'reverse_mismatch';
@@ -204,6 +210,7 @@ export default function Revalidacao() {
   const [results, setResults] = useState([]);
   const [job, setJob] = useState(null);
   const [filter, setFilter] = useState('ALL');
+  const [includeReviewed, setIncludeReviewed] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState(null);
@@ -219,6 +226,7 @@ export default function Revalidacao() {
       const response = await httpsCallable(functions, 'revalidateCustomerCoordinates')({
         jobId: fresh ? undefined : (jobId || job?.id),
         batchSize: 50,
+        includeReviewed: fresh ? includeReviewed : job?.scope === 'full',
       });
       const data = response.data;
       const nextJob = {
@@ -227,6 +235,8 @@ export default function Revalidacao() {
         total: data.total,
         processed: data.processed,
         summary: data.summary,
+        scope: data.scope || (fresh && includeReviewed ? 'full' : 'pending_or_changed'),
+        skippedReviewedCount: data.skippedReviewedCount || 0,
       };
       setJob(nextJob);
       globalThis.localStorage.setItem(JOB_STORAGE_KEY, data.jobId);
@@ -342,9 +352,17 @@ export default function Revalidacao() {
             <Box>
               <Typography variant="h6">Auditoria segura por lotes</Typography>
               <Typography variant="body2" color="text.secondary">Cada lote usa Mapbox Structured Input, compara forward/reverse, preserva a coordenada anterior e nunca altera clientes sem sua aprovação.</Typography>
-              <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.75 }}>{job ? `Progresso: ${processedLabel}` : 'Inicie uma nova auditoria para criar uma prévia revisável.'}</Typography>
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.75 }}>
+                {job
+                  ? `Progresso: ${processedLabel}${job.skippedReviewedCount ? ` · ${job.skippedReviewedCount} coordenadas ja aprovadas foram preservadas` : ''}`
+                  : 'Por padrao, novas auditorias consultam apenas pendencias ou enderecos alterados.'}
+              </Typography>
             </Box>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
+              <FormControlLabel
+                control={<Switch checked={includeReviewed} onChange={(event) => setIncludeReviewed(event.target.checked)} disabled={loading || Boolean(job?.status === 'running')} />}
+                label={<Typography variant="caption">Auditoria completa</Typography>}
+              />
               <Button variant="outlined" onClick={resumeLastJob} disabled={loading || !globalThis.localStorage.getItem(JOB_STORAGE_KEY)}>Retomar auditoria</Button>
               {job?.status === 'running' && <Button variant="outlined" startIcon={<PlayArrowIcon />} onClick={() => runBatch()} disabled={loading}>Processar próximo lote</Button>}
               <Button variant="contained" startIcon={loading ? <CircularProgress size={18} color="inherit" /> : <RefreshIcon />} onClick={() => runBatch({ fresh: true })} disabled={loading}>{loading ? 'Processando...' : 'Nova auditoria'}</Button>
@@ -359,6 +377,7 @@ export default function Revalidacao() {
         <>
           <Grid container spacing={2} sx={{ mb: 3 }}>
             <Metric label="Processados" value={processedLabel} />
+            <Metric label="Preservadas" value={job.scope === 'full' ? (job.summary?.retained ?? 0) : (job.skippedReviewedCount ?? 0)} color="success.main" />
             <Metric label="Validados" value={job.summary?.approvalEligible ?? results.filter((item) => item.approvalEligible).length} color="success.main" />
             <Metric label="Exigem revisão" value={job.summary?.needsReview ?? 0} color="warning.main" />
             <Metric label="Variação acima de 2 km" value={job.summary?.catastrophicDistance ?? 0} color="error.main" />
@@ -379,7 +398,11 @@ export default function Revalidacao() {
                 </Stack>
               </Stack>
 
-              <Alert severity="info" sx={{ mb: 2 }}>A aprovação altera apenas a proposta validada. Coordenadas anteriores continuam armazenadas para auditoria.</Alert>
+              <Alert severity="info" sx={{ mb: 2 }}>
+                {job.scope === 'full'
+                  ? 'Auditoria completa: inclui coordenadas ja aprovadas. Use apenas quando precisar revisar a base inteira.'
+                  : 'As coordenadas ja aprovadas para o mesmo endereco sao preservadas e nao geram nova consulta Mapbox. Coordenadas anteriores continuam armazenadas para auditoria.'}
+              </Alert>
               <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 620 }}>
                 <Table stickyHeader size="small" aria-label="Resultados da auditoria de coordenadas">
                   <TableHead>

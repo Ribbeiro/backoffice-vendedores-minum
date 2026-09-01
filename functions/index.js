@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { initializeApp, getApps } = require('firebase-admin/app');
 const { getDatabase } = require('firebase-admin/database');
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
+const { onValueCreated } = require('firebase-functions/v2/database');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { defineSecret, defineString } = require('firebase-functions/params');
 const logger = require('firebase-functions/logger');
@@ -19,14 +20,23 @@ const {
 const {
   ProcessorError,
   buildFirebaseCustomer,
+  isValidCoordinates,
   mergeCustomer,
   processOdooWorkbook,
   toFirebaseKey,
 } = require('./src/odooLeadProcessor');
 const {
+  fromFirebaseSafeValue,
+  toFirebaseSafeValue,
+} = require('./src/firebaseSafeData');
+const {
   auditExistingCustomers,
+  selectCustomerIdsForAudit,
   summarizeAudit,
 } = require('./src/revalidationService');
+const { createOdooClient } = require('./src/odooClient');
+const { processOdooVisitEvent, syncPendingOdooVisitEvents } = require('./src/odooVisitSyncService');
+const { verifyOdooJsonRpcConnection } = require('./src/odooConnectionVerifier');
 
 // A URL explicita permite que o Firebase CLI carregue os endpoints durante o
 // deploy, quando o metadata automatico do Realtime Database ainda nao existe.
@@ -38,6 +48,9 @@ if (!getApps().length) {
 
 const database = getDatabase();
 const REGION = 'southamerica-east1';
+// A instancia padrao do Realtime Database deste projeto fica em us-central1.
+// Gatilhos Eventarc de RTDB precisam nascer na mesma regiao da instancia.
+const RTDB_TRIGGER_REGION = 'us-central1';
 const MAX_FILE_SIZE_BYTES = 6 * 1024 * 1024;
 const JOB_TTL_MS = 24 * 60 * 60 * 1000;
 const CNPJ_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -46,6 +59,7 @@ const GEOCODING_AUDIT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_REVALIDATION_BATCH_SIZE = 50;
 const MAPBOX_ACCESS_TOKEN = defineSecret('MAPBOX_ACCESS_TOKEN');
 const MAPBOX_GEOCODING_PERMANENT = defineString('MAPBOX_GEOCODING_PERMANENT', { default: 'true' });
+const ODOO_API_KEY = defineSecret('ODOO_API_KEY');
 
 function normalizeRole(value) {
   return String(value || '').trim().toLowerCase();
@@ -270,6 +284,58 @@ function sanitizeForRealtime(value) {
   return value;
 }
 
+function readOdooApiKey() {
+  try {
+    return String(ODOO_API_KEY.value() || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function isOdooSyncEnabled() {
+  // Estes valores ficam em functions/.env, fora do Git. Eles sao opcionais
+  // durante a descoberta da API e so passam a ser usados apos a validacao.
+  return String(process.env.ODOO_SYNC_ENABLED || 'false').trim().toLowerCase() === 'true';
+}
+
+function odooSyncBatchSize() {
+  const value = Number(process.env.ODOO_SYNC_MAX_EVENTS || 20);
+  return Number.isFinite(value) ? Math.max(1, Math.min(100, Math.floor(value))) : 20;
+}
+
+function odooRuntimeConfiguration() {
+  return {
+    ...process.env,
+  };
+}
+
+/** Centraliza a criacao do cliente para todos os caminhos de sincronizacao. */
+function createRuntimeOdooClient() {
+  return createOdooClient({
+    apiKey: readOdooApiKey(),
+    env: odooRuntimeConfiguration(),
+  });
+}
+
+function readVisitEventPathPart(value, fieldName) {
+  const normalized = String(value || '').trim();
+  const forbiddenCharacters = ['.', '#', '$', '[', ']', '/'];
+  if (!normalized || normalized.length > 200 || forbiddenCharacters.some((character) => normalized.includes(character))) {
+    throw new HttpsError('invalid-argument', `Informe um ${fieldName} de evento valido.`);
+  }
+  return normalized;
+}
+
+async function runOdooVisitSync({ includeBlocked = false } = {}) {
+  const odooClient = createRuntimeOdooClient();
+  return syncPendingOdooVisitEvents({
+    database,
+    odooClient,
+    maxEvents: odooSyncBatchSize(),
+    includeBlocked,
+  });
+}
+
 function clampRevalidationBatchSize(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return MAX_REVALIDATION_BATCH_SIZE;
@@ -302,7 +368,7 @@ async function readVisitEventsByCustomer() {
   return grouped;
 }
 
-async function loadOrCreateRevalidationJob(request, customers, requestedJobId) {
+async function loadOrCreateRevalidationJob(request, customerIds, requestedJobId, metadata = {}) {
   if (requestedJobId) {
     const reference = database.ref(`geocodingAuditJobs/${requestedJobId}`);
     const snapshot = await reference.get();
@@ -323,8 +389,10 @@ async function loadOrCreateRevalidationJob(request, customers, requestedJobId) {
     expiresAt: now + GEOCODING_AUDIT_TTL_MS,
     createdBy: request.auth.uid,
     algorithmVersion: GEOCODING_ALGORITHM_VERSION,
-    customerIds: Object.keys(customers).sort(),
-    total: Object.keys(customers).length,
+    customerIds: customerIds.sort(),
+    total: customerIds.length,
+    scope: metadata.includeReviewed ? 'full' : 'pending_or_changed',
+    skippedReviewedCount: metadata.skippedReviewedCount || 0,
     nextIndex: 0,
     processed: 0,
     approvedCount: 0,
@@ -336,10 +404,140 @@ async function loadOrCreateRevalidationJob(request, customers, requestedJobId) {
 }
 
 function compactPreview(records) {
-  return records.map((record) => ({
+  return toFirebaseSafeValue(records.map((record) => ({
     ...record,
     __meta: record.__meta || {},
-  }));
+  })));
+}
+
+function previewCoordinateSummary(records, summary = {}) {
+  const statusOf = (record) => String(record?.__meta?.coordinateStatus || '').trim().toLowerCase();
+  const confirmedStatuses = new Set(['confirmed', 'manual_confirmed']);
+  const confirmed = records.filter((record) => confirmedStatuses.has(statusOf(record))).length;
+  const manual = records.filter((record) => statusOf(record) === 'manual_confirmed').length;
+  const missing = records.filter((record) => !isValidCoordinates(record?.latitude, record?.longitude)).length;
+
+  return {
+    ...summary,
+    coordinatesConfirmed: confirmed,
+    coordinatesManualConfirmed: manual,
+    coordinatesMissing: missing,
+    coordinatesNeedsReview: records.filter((record) => !confirmedStatuses.has(statusOf(record))).length,
+  };
+}
+
+function reviewedPreviewRecord(record, {
+  action,
+  latitude,
+  longitude,
+  reason,
+  jobId,
+  userId,
+  profile,
+}) {
+  const normalizedAction = String(action || '').trim().toLowerCase();
+  const current = { ...record };
+  const meta = { ...(record.__meta || {}) };
+  const reviewedAt = Date.now();
+  const proposedLatitude = Number(meta.geocodedLatitude);
+  const proposedLongitude = Number(meta.geocodedLongitude);
+  const currentLatitude = Number(record.latitude);
+  const currentLongitude = Number(record.longitude);
+  let selectedLatitude;
+  let selectedLongitude;
+  let selectedNavigationLatitude;
+  let selectedNavigationLongitude;
+  let reviewStatus;
+  let coordinateStatus;
+  let coordinateSource;
+  let coordinatePrecisionLevel;
+  let reviewReason;
+
+  if (normalizedAction === 'accept_mapbox') {
+    if (!isValidCoordinates(proposedLatitude, proposedLongitude)) {
+      throw new HttpsError('failed-precondition', 'Esta oportunidade nao possui uma coordenada sugerida pelo Mapbox para aprovar.');
+    }
+    selectedLatitude = proposedLatitude;
+    selectedLongitude = proposedLongitude;
+    selectedNavigationLatitude = isValidCoordinates(meta.navigationLatitude, meta.navigationLongitude)
+      ? Number(meta.navigationLatitude)
+      : selectedLatitude;
+    selectedNavigationLongitude = isValidCoordinates(meta.navigationLatitude, meta.navigationLongitude)
+      ? Number(meta.navigationLongitude)
+      : selectedLongitude;
+    reviewStatus = 'approved_import';
+    coordinateStatus = 'confirmed';
+    coordinateSource = 'Mapbox Geocoding v6 (confirmada na importacao)';
+    coordinatePrecisionLevel = meta.coordinatePrecisionLevel || 'unknown';
+    reviewReason = 'Proposta Mapbox confirmada pelo administrador durante a importacao.';
+  } else if (normalizedAction === 'confirm_current') {
+    if (!isValidCoordinates(currentLatitude, currentLongitude)) {
+      throw new HttpsError('failed-precondition', 'Nao ha coordenada atual valida para confirmar. Informe a coordenada manualmente.');
+    }
+    selectedLatitude = currentLatitude;
+    selectedLongitude = currentLongitude;
+    selectedNavigationLatitude = selectedLatitude;
+    selectedNavigationLongitude = selectedLongitude;
+    reviewStatus = 'manual_import';
+    coordinateStatus = 'manual_confirmed';
+    coordinateSource = 'Coordenada de origem confirmada na importacao';
+    coordinatePrecisionLevel = 'manual';
+    reviewReason = 'Coordenada de origem confirmada pelo administrador durante a importacao.';
+  } else if (normalizedAction === 'manual') {
+    selectedLatitude = Number(latitude);
+    selectedLongitude = Number(longitude);
+    if (!isValidCoordinates(selectedLatitude, selectedLongitude)) {
+      throw new HttpsError('invalid-argument', 'Informe uma latitude e uma longitude validas.');
+    }
+    if (String(reason || '').trim().length < 5) {
+      throw new HttpsError('invalid-argument', 'Explique a correcao manual em pelo menos 5 caracteres.');
+    }
+    selectedNavigationLatitude = selectedLatitude;
+    selectedNavigationLongitude = selectedLongitude;
+    reviewStatus = 'manual_import';
+    coordinateStatus = 'manual_confirmed';
+    coordinateSource = 'Correcao manual durante a importacao';
+    coordinatePrecisionLevel = 'manual';
+    reviewReason = String(reason).trim();
+  } else {
+    throw new HttpsError('invalid-argument', 'Acao de revisao de coordenada invalida.');
+  }
+
+  const coordinateReview = {
+    status: reviewStatus,
+    jobId,
+    addressCanonicalKey: meta.canonicalKey || null,
+    reason: reviewReason,
+    reviewedAt,
+    reviewedBy: userId,
+    reviewedByName: profile?.name || profile?.email || 'Administrador',
+    algorithmVersion: GEOCODING_ALGORITHM_VERSION,
+  };
+  const geocoding = {
+    ...(meta.geocoding || {}),
+    status: coordinateStatus,
+    reason: reviewReason,
+    reviewedAt,
+    reviewedBy: userId,
+    reviewedDuringImport: true,
+    finalCoordinate: { latitude: selectedLatitude, longitude: selectedLongitude },
+  };
+
+  current.latitude = selectedLatitude;
+  current.longitude = selectedLongitude;
+  current.__meta = {
+    ...meta,
+    geocodedLatitude: normalizedAction === 'manual' ? selectedLatitude : (meta.geocodedLatitude ?? selectedLatitude),
+    geocodedLongitude: normalizedAction === 'manual' ? selectedLongitude : (meta.geocodedLongitude ?? selectedLongitude),
+    navigationLatitude: selectedNavigationLatitude,
+    navigationLongitude: selectedNavigationLongitude,
+    coordinateStatus,
+    coordinateSource,
+    coordinatePrecisionLevel,
+    geocoding,
+    geocodingReview: coordinateReview,
+  };
+  return current;
 }
 
 function toFunctionError(error) {
@@ -377,6 +575,7 @@ exports.processOdooLeadImport = onCall(
         enableResearch: options.enableResearch !== false,
         enableGeocoding: options.enableGeocoding !== false,
       });
+      const summary = previewCoordinateSummary(result.records, result.summary);
 
       const job = {
         id: jobId,
@@ -386,7 +585,7 @@ exports.processOdooLeadImport = onCall(
         createdBy: request.auth.uid,
         fileName,
         source: 'odoo_raw_export',
-        summary: result.summary,
+        summary,
         audit: result.audit,
         records: compactPreview(result.records),
         options: {
@@ -399,10 +598,94 @@ exports.processOdooLeadImport = onCall(
       return {
         jobId,
         status: job.status,
-        summary: result.summary,
+        summary,
         audit: result.audit,
-        records: compactPreview(result.records),
+        // A resposta HTTP pode preservar os cabecalhos legiveis da planilha.
+        // A codificacao e necessaria apenas para a copia temporaria no RTDB.
+        records: result.records,
       };
+    } catch (error) {
+      throw toFunctionError(error);
+    }
+  },
+);
+
+/**
+ * Registra a decisao do administrador ainda na previa da importacao. Esta
+ * etapa reaproveita a proposta ja retornada pelo Mapbox e nunca faz uma nova
+ * consulta de geocodificacao.
+ */
+exports.reviewOdooImportCoordinate = onCall(
+  {
+    region: REGION,
+    timeoutSeconds: 60,
+    memory: '256MiB',
+    maxInstances: 2,
+    invoker: 'public',
+  },
+  async (request) => {
+    try {
+      const profile = await requireActiveAdmin(request);
+      const jobId = String(request.data?.jobId || '').trim();
+      const recordId = String(request.data?.recordId || '').trim();
+      if (!jobId || !recordId) {
+        throw new HttpsError('invalid-argument', 'Informe a previa e a oportunidade que sera revisada.');
+      }
+
+      const jobReference = database.ref(`leadImportJobs/${jobId}`);
+      const jobSnapshot = await jobReference.get();
+      const job = jobSnapshot.val();
+      if (!job) throw new HttpsError('not-found', 'A previa expirou ou nao foi encontrada.');
+      if (job.createdBy !== request.auth.uid) {
+        throw new HttpsError('permission-denied', 'Apenas quem gerou esta previa pode revisar suas coordenadas.');
+      }
+      if (job.status !== 'preview_ready') {
+        throw new HttpsError('failed-precondition', 'Esta previa ja foi importada e nao pode mais ser alterada.');
+      }
+
+      const storedRecords = Array.isArray(job.records) ? job.records : Object.values(job.records || {});
+      const records = fromFirebaseSafeValue(storedRecords);
+      const recordIndex = records.findIndex((record) => String(record?.ID || '').trim() === recordId);
+      if (recordIndex < 0) {
+        throw new HttpsError('not-found', 'A oportunidade solicitada nao pertence a esta previa.');
+      }
+
+      const reviewed = reviewedPreviewRecord(records[recordIndex], {
+        action: request.data?.action,
+        latitude: request.data?.latitude,
+        longitude: request.data?.longitude,
+        reason: request.data?.reason,
+        jobId,
+        userId: request.auth.uid,
+        profile,
+      });
+      records[recordIndex] = reviewed;
+
+      const audit = Array.isArray(job.audit) ? job.audit : Object.values(job.audit || {});
+      audit.push({
+        row: reviewed.__meta?.sourceRows?.join(', ') || null,
+        id: reviewed.ID,
+        minumCode: reviewed.ID,
+        odooLeadId: reviewed['Odoo Lead ID'] || '',
+        odooExternalId: reviewed['Odoo External ID'] || '',
+        opportunity: reviewed.Opportunity || reviewed['Client - Name'] || reviewed.ID,
+        stage: 'coordinate_review',
+        status: 'FILLED',
+        source: 'Revisao administrativa na importacao',
+        fields: ['latitude', 'longitude'],
+        details: reviewed.__meta?.geocodingReview?.reason || 'Coordenada revisada antes da importacao.',
+      });
+      const summary = previewCoordinateSummary(records, job.summary);
+      await jobReference.update({
+        records: compactPreview(records),
+        audit: toFirebaseSafeValue(audit),
+        summary,
+        updatedAt: Date.now(),
+        lastCoordinateReviewAt: Date.now(),
+        lastCoordinateReviewBy: request.auth.uid,
+      });
+
+      return { record: reviewed, summary };
     } catch (error) {
       throw toFunctionError(error);
     }
@@ -426,7 +709,15 @@ exports.cleanupExpiredOdooImportJobs = onSchedule(
  * Cloud Function para confirmar e gravar os clientes aprovados da prévia no Firebase.
  */
 exports.commitOdooLeadImport = onCall(
-  { region: REGION, timeoutSeconds: 180, memory: '256MiB', maxInstances: 2 },
+  {
+    region: REGION,
+    timeoutSeconds: 180,
+    memory: '256MiB',
+    maxInstances: 2,
+    // O endpoint precisa aceitar a chamada do SDK Firebase no navegador. A
+    // autorizacao comercial permanece restrita por requireActiveAdmin abaixo.
+    invoker: 'public',
+  },
   async (request) => {
     try {
       await requireActiveAdmin(request);
@@ -441,7 +732,8 @@ exports.commitOdooLeadImport = onCall(
       if (job.createdBy !== request.auth.uid) throw new HttpsError('permission-denied', 'Apenas quem gerou esta prévia pode confirmá-la.');
       if (job.status !== 'preview_ready') throw new HttpsError('failed-precondition', 'Esta prévia já foi importada.');
 
-      const records = Array.isArray(job.records) ? job.records : Object.values(job.records || {});
+      const storedRecords = Array.isArray(job.records) ? job.records : Object.values(job.records || {});
+      const records = fromFirebaseSafeValue(storedRecords);
       if (!records.length) throw new HttpsError('failed-precondition', 'A prévia não contém oportunidades.');
 
       const customersReference = database.ref('customers');
@@ -451,15 +743,32 @@ exports.commitOdooLeadImport = onCall(
       const nextCustomers = {};
 
       records.forEach((record) => {
-        const key = toFirebaseKey(record.ID);
+        const matchedCustomerKey = mode === 'merge'
+          ? String(record.__meta?.matchedCustomerKey || '').trim()
+          : '';
+        const existingKey = matchedCustomerKey && existingCustomers[matchedCustomerKey]
+          ? matchedCustomerKey
+          : '';
+        const existingCustomer = existingKey ? existingCustomers[existingKey] : null;
+        const generatedFromOdoo = ['odoo_technical_id', 'odoo_external_id'].includes(record.__meta?.idSource);
+
+        // Em uma exportacao direta do Odoo nao existe codigo Minum. Se o lead
+        // ja esta no Firebase, conserva sua chave legada e apenas atualiza os
+        // dados; se for novo, usa a chave deterministica odoo_lead_<id>.
+        const minumCode = generatedFromOdoo && existingCustomer
+          ? String(existingCustomer.minumCode || existingCustomer.externalId || record.ID || '').trim()
+          : String(record.ID || '').trim();
+        const key = existingKey || toFirebaseKey(minumCode);
         const incoming = {
           ...buildFirebaseCustomer(record, {
             jobId,
             importedBy: request.auth.uid,
             importedAt,
+            minumCodeOverride: minumCode,
           }),
           id: key,
-          externalId: String(record.ID || '').trim(),
+          externalId: minumCode,
+          minumCode,
           importedAt,
           importedBy: request.auth.uid,
           updatedAt: importedAt,
@@ -512,7 +821,17 @@ exports.revalidateCustomerCoordinates = onCall(
       const customersSnapshot = await database.ref('customers').get();
       const customers = customersSnapshot.val() || {};
       const requestedJobId = String(request.data?.jobId || '').trim();
-      const { id: jobId, reference: jobReference, job } = await loadOrCreateRevalidationJob(request, customers, requestedJobId);
+      const includeReviewed = request.data?.includeReviewed === true;
+      const candidateIds = selectCustomerIdsForAudit(customers, { includeReviewed });
+      const { id: jobId, reference: jobReference, job } = await loadOrCreateRevalidationJob(
+        request,
+        candidateIds,
+        requestedJobId,
+        {
+          includeReviewed,
+          skippedReviewedCount: Math.max(0, Object.keys(customers).length - candidateIds.length),
+        },
+      );
       const customerIds = Array.isArray(job.customerIds) ? job.customerIds : Object.keys(customers).sort();
       const startIndex = Math.max(0, Number(job.nextIndex) || 0);
       const batchSize = clampRevalidationBatchSize(request.data?.batchSize);
@@ -522,7 +841,16 @@ exports.revalidateCustomerCoordinates = onCall(
         const previousResults = (await jobReference.child('results').get()).val() || {};
         const summary = summarizeAudit(Object.values(previousResults));
         await jobReference.update({ status: 'completed', summary, completedAt: Date.now(), nextIndex: customerIds.length });
-        return { jobId, status: 'completed', total: customerIds.length, processed: customerIds.length, summary, results: [] };
+        return {
+          jobId,
+          status: 'completed',
+          total: customerIds.length,
+          processed: customerIds.length,
+          scope: job.scope,
+          skippedReviewedCount: job.skippedReviewedCount || 0,
+          summary,
+          results: [],
+        };
       }
 
       const [visitEventsByCustomer, mapboxClient] = await Promise.all([
@@ -534,6 +862,7 @@ exports.revalidateCustomerCoordinates = onCall(
         visitEventsByCustomer,
         mapboxGeocoderClient: mapboxClient,
         customerIds: batchIds,
+        includeReviewed: job.scope === 'full',
       });
       const updates = {};
       batchResults.forEach((result) => {
@@ -561,12 +890,260 @@ exports.revalidateCustomerCoordinates = onCall(
         total: customerIds.length,
         processed: nextIndex,
         batchSize: batchResults.length,
+        scope: job.scope,
+        skippedReviewedCount: job.skippedReviewedCount || 0,
         summary,
         results: batchResults,
       };
     } catch (error) {
       throw toFunctionError(error);
     }
+  },
+);
+
+/**
+ * Processa feedbacks de visita no servidor. O job nao usa credenciais no app
+ * nem no front-end e grava apenas o resultado da sincronizacao no evento.
+ */
+exports.syncPendingOdooVisitEvents = onSchedule(
+  {
+    region: REGION,
+    schedule: 'every 5 minutes',
+    timeZone: 'America/Sao_Paulo',
+    memory: '256MiB',
+    secrets: [ODOO_API_KEY],
+  },
+  async () => {
+    if (!isOdooSyncEnabled()) {
+      logger.info('Sincronizacao Odoo permanece desativada por configuracao.');
+      return;
+    }
+    const summary = await runOdooVisitSync();
+    logger.info('Lote de feedbacks Odoo processado.', {
+      scanned: summary.scanned,
+      counts: summary.counts,
+    });
+  },
+);
+
+/**
+ * Envia o feedback elegivel assim que ele e criado pelo aplicativo. O job
+ * agendado continua como rede de seguranca para falhas temporarias,
+ * indisponibilidade do Odoo ou eventos criados durante uma atualizacao.
+ */
+exports.syncOdooVisitEventOnCreate = onValueCreated(
+  {
+    region: RTDB_TRIGGER_REGION,
+    ref: '/visitEvents/{routeId}/{stopId}/{eventId}',
+    memory: '256MiB',
+    maxInstances: 2,
+    concurrency: 1,
+    secrets: [ODOO_API_KEY],
+  },
+  async (event) => {
+    const feedback = event.data.val();
+    const isEligible = String(feedback?.eventType || '').trim() === 'feedback_submitted'
+      && Number.isSafeInteger(Number(feedback?.odooLeadId))
+      && Number(feedback.odooLeadId) > 0
+      && String(feedback?.odooSyncStatus || 'pending').trim() !== 'not_required';
+
+    if (!isEligible) return;
+    if (!isOdooSyncEnabled()) {
+      logger.info('Feedback Odoo recebido enquanto a fila esta desativada.');
+      return;
+    }
+
+    const path = `visitEvents/${event.params.routeId}/${event.params.stopId}/${event.params.eventId}`;
+    try {
+      const result = await processOdooVisitEvent({
+        database,
+        path,
+        event: feedback,
+        odooClient: createRuntimeOdooClient(),
+      });
+      logger.info('Feedback processado pela sincronizacao imediata Odoo.', {
+        path,
+        status: result.status,
+      });
+    } catch (error) {
+      // O evento permanece pendente e o job de cinco minutos o retomara.
+      logger.error('Falha inesperada na sincronizacao imediata de feedback Odoo.', {
+        path,
+        code: String(error?.code || 'odoo_immediate_sync_error'),
+      });
+    }
+  },
+);
+
+/** Permite ao administrador testar um lote controlado apos configurar o Odoo. */
+exports.processOdooVisitEvents = onCall(
+  {
+    region: REGION,
+    timeoutSeconds: 180,
+    memory: '256MiB',
+    secrets: [ODOO_API_KEY],
+  },
+  async (request) => {
+    await requireActiveAdmin(request);
+    if (!isOdooSyncEnabled()) {
+      throw new HttpsError(
+        'failed-precondition',
+        'A sincronizacao Odoo esta desativada. Valide o ambiente e habilite ODOO_SYNC_ENABLED=true no servidor.',
+      );
+    }
+    const includeBlocked = request.data?.retryBlocked === true;
+    return runOdooVisitSync({ includeBlocked });
+  },
+);
+
+/**
+ * Envia somente um feedback escolhido pelo administrador. Esta acao existe
+ * para validar a integracao com um registro real do aplicativo sem ativar o
+ * processamento automatico da fila inteira.
+ */
+exports.processSingleOdooVisitEvent = onCall(
+  {
+    region: REGION,
+    timeoutSeconds: 60,
+    memory: '256MiB',
+    // O SDK callable precisa atingir o endpoint; a autorizacao administrativa
+    // continua obrigatoria dentro do handler.
+    invoker: 'public',
+    secrets: [ODOO_API_KEY],
+  },
+  async (request) => {
+    await requireActiveAdmin(request);
+    const routeId = readVisitEventPathPart(request.data?.routeId, 'identificador da rota');
+    const stopId = readVisitEventPathPart(request.data?.stopId, 'identificador da parada');
+    const eventId = readVisitEventPathPart(request.data?.eventId, 'identificador do feedback');
+    const path = `visitEvents/${routeId}/${stopId}/${eventId}`;
+    const eventSnapshot = await database.ref(path).get();
+    const event = eventSnapshot.val();
+
+    if (!event) {
+      throw new HttpsError('not-found', 'O feedback selecionado nao foi encontrado no Firebase.');
+    }
+    if (String(event.eventType || '').trim() !== 'feedback_submitted') {
+      throw new HttpsError('failed-precondition', 'Somente feedbacks de visita podem ser enviados ao Odoo.');
+    }
+    if (!Number.isSafeInteger(Number(event.odooLeadId)) || Number(event.odooLeadId) <= 0) {
+      throw new HttpsError('failed-precondition', 'Este feedback nao possui um ID tecnico Odoo valido. Reimporte ou corrija o cliente antes de testar.');
+    }
+    if (String(event.odooSyncStatus || '').trim() === 'synced') {
+      return {
+        status: 'already_synced',
+        path,
+        odooActivityId: event.odooActivityId || null,
+      };
+    }
+
+    const odooClient = createOdooClient({
+      apiKey: readOdooApiKey(),
+      env: odooRuntimeConfiguration(),
+    });
+    if (!odooClient.configuration.ready) {
+      throw new HttpsError(
+        'failed-precondition',
+        'A integracao Odoo ainda nao possui a configuracao necessaria para enviar este feedback.',
+      );
+    }
+
+    const result = await processOdooVisitEvent({
+      database,
+      path,
+      event,
+      odooClient,
+      includeBlocked: request.data?.retryBlocked === true,
+    });
+    logger.info('Feedback individual enviado para validacao Odoo.', {
+      status: result.status,
+      path,
+      requestedBy: request.auth.uid,
+    });
+    return result;
+  },
+);
+
+/**
+ * Cria uma unica atividade tecnica no lead combinado para validar a escrita
+ * sem liberar o lote de feedbacks pendentes. O resumo fixo permite repetir o
+ * teste sem duplicar atividades no Odoo.
+ */
+exports.createOdooIntegrationTestActivity = onCall(
+  {
+    region: REGION,
+    timeoutSeconds: 60,
+    memory: '256MiB',
+    secrets: [ODOO_API_KEY],
+  },
+  async (request) => {
+    const profile = await requireActiveAdmin(request);
+    const odooClient = createOdooClient({
+      apiKey: readOdooApiKey(),
+      env: odooRuntimeConfiguration(),
+    });
+    if (!odooClient.configuration.ready) {
+      throw new HttpsError(
+        'failed-precondition',
+        'A integracao Odoo ainda nao possui a configuracao necessaria para criar a atividade de teste.',
+      );
+    }
+
+    const activityId = await odooClient.ensureActivity({
+      id: 'integration_test_crm_lead_58680',
+      eventType: 'feedback_submitted',
+      odooLeadId: 58680,
+      odooActivitySummary: 'Minum | Teste de integracao',
+      sellerName: String(profile?.name || request.auth?.token?.email || 'Administracao Minum'),
+      feedback: 'Atividade tecnica idempotente para validar a integracao Minum com o CRM.',
+      commercialOutcome: 'Teste de integracao',
+      nextAction: 'Nenhuma acao comercial. Registro tecnico de validacao.',
+    });
+
+    logger.info('Atividade tecnica Odoo confirmada.', {
+      leadId: 58680,
+      activityId,
+      requestedBy: request.auth.uid,
+    });
+    return {
+      status: 'created_or_existing',
+      leadId: 58680,
+      activityId,
+      summary: 'Minum | Teste de integracao',
+    };
+  },
+);
+
+/**
+ * Teste administrativo sem escrita: autentica a instancia Odoo 18 via RPC,
+ * localiza crm.lead, valida uma oportunidade conhecida e lista os tipos de
+ * atividade disponiveis para configuracao.
+ */
+exports.verifyOdooIntegration = onCall(
+  {
+    region: REGION,
+    timeoutSeconds: 60,
+    memory: '256MiB',
+    secrets: [ODOO_API_KEY],
+  },
+  async (request) => {
+    await requireActiveAdmin(request);
+    const result = await verifyOdooJsonRpcConnection({
+      apiKey: readOdooApiKey(),
+      env: odooRuntimeConfiguration(),
+      leadId: 58680,
+    });
+    logger.info('Verificacao segura da integracao Odoo concluida.', {
+      status: result.status,
+      available: result.available,
+      baseUrl: result.baseUrl || null,
+      attempts: result.attempts?.map((attempt) => ({
+        baseUrl: attempt.baseUrl,
+        code: attempt.code,
+        status: attempt.status || null,
+      })),
+    });
+    return result;
   },
 );
 
@@ -636,6 +1213,7 @@ exports.applyCoordinateRevalidation = onCall(
         const review = {
           status: 'approved',
           jobId,
+          addressCanonicalKey: result.canonicalKey || null,
           approvedAt: reviewAt,
           approvedBy: request.auth.uid,
           approvedByName: profile?.name || profile?.email || 'Administrador',
@@ -714,6 +1292,7 @@ exports.applyManualCoordinateRevalidation = onCall(
       const review = {
         status: 'manual',
         jobId,
+        addressCanonicalKey: result.canonicalKey || null,
         reason,
         reviewedAt,
         reviewedBy: request.auth.uid,
@@ -740,6 +1319,8 @@ exports.applyManualCoordinateRevalidation = onCall(
         [`customers/${customerId}/coordinatePrecisionLevel`]: 'manual',
         [`customers/${customerId}/coordinateStatus`]: 'manual_confirmed',
         [`customers/${customerId}/coordinateSource`]: 'Correcao manual administrativa',
+        [`customers/${customerId}/canonicalKey`]: result.canonicalKey || null,
+        [`customers/${customerId}/normalizedAddress`]: result.normalizedAddress || null,
         [`customers/${customerId}/geocoding`]: sanitizeForRealtime(geocoding),
         [`customers/${customerId}/geocodingReview`]: review,
         [`geocodingAuditJobs/${jobId}/results/${customerId}/reviewStatus`]: 'manual',
@@ -822,6 +1403,154 @@ exports.geocodeAddress = onCall(
         confidence: result.confidence,
         label: result.label,
       };
+    } catch (error) {
+      throw toFunctionError(error);
+    }
+  },
+);
+
+function textValue(value) {
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return '';
+}
+
+/** A oportunidade identifica o prospecto; o contato nunca deve substitui-la. */
+function primaryCustomerName(customer) {
+  return textValue(customer?.opportunity)
+    || textValue(customer?.name)
+    || textValue(customer?.clientName)
+    || textValue(customer?.contactName)
+    || textValue(customer?.externalId)
+    || textValue(customer?.id);
+}
+
+function addCustomerIdentity(index, type, value, customer) {
+  const normalized = textValue(value);
+  if (normalized) index.set(`${type}:${normalized}`, customer);
+}
+
+function buildCustomerNameIndex(customers) {
+  const index = new Map();
+  Object.entries(customers || {}).forEach(([key, rawCustomer]) => {
+    const name = primaryCustomerName(rawCustomer);
+    if (!name) return;
+
+    const customer = {
+      name,
+      opportunity: textValue(rawCustomer?.opportunity),
+      clientName: textValue(rawCustomer?.clientName) || textValue(rawCustomer?.contactName),
+    };
+    addCustomerIdentity(index, 'key', key, customer);
+    addCustomerIdentity(index, 'id', rawCustomer?.id, customer);
+    addCustomerIdentity(index, 'external', rawCustomer?.externalId, customer);
+    addCustomerIdentity(index, 'minum', rawCustomer?.minumCode, customer);
+    addCustomerIdentity(index, 'odoo', rawCustomer?.odooLeadId, customer);
+    addCustomerIdentity(index, 'odooExternal', rawCustomer?.odooExternalId, customer);
+  });
+  return index;
+}
+
+function findCustomerForSnapshot(snapshot, customerIndex) {
+  const identities = [
+    ['key', snapshot?.customerKey],
+    ['id', snapshot?.customerId],
+    ['external', snapshot?.customerExternalId],
+    ['external', snapshot?.externalId],
+    ['minum', snapshot?.minumCode],
+    ['odoo', snapshot?.odooLeadId],
+    ['odooExternal', snapshot?.odooExternalId],
+  ];
+  for (const [type, value] of identities) {
+    const customer = customerIndex.get(`${type}:${textValue(value)}`);
+    if (customer) return customer;
+  }
+  return null;
+}
+
+function normalizeSnapshotNames(node, path, customerIndex, updates, counts) {
+  if (!node || typeof node !== 'object') return;
+
+  if (Object.prototype.hasOwnProperty.call(node, 'customerName')) {
+    const customer = findCustomerForSnapshot(node, customerIndex);
+    if (customer) {
+      if (textValue(node.customerName) !== customer.name) {
+        updates[`${path}/customerName`] = customer.name;
+        counts.snapshotsUpdated += 1;
+      }
+      // Mantem as copias de rota autossuficientes para Android, historico e
+      // relatorios mesmo quando o cadastro principal for removido no futuro.
+      if (customer.opportunity && textValue(node.opportunity) !== customer.opportunity) {
+        updates[`${path}/opportunity`] = customer.opportunity;
+      }
+      if (customer.clientName && !textValue(node.clientName)) {
+        updates[`${path}/clientName`] = customer.clientName;
+      }
+    }
+  }
+
+  Object.entries(node).forEach(([childKey, childValue]) => {
+    if (childValue && typeof childValue === 'object') {
+      normalizeSnapshotNames(childValue, `${path}/${childKey}`, customerIndex, updates, counts);
+    }
+  });
+}
+
+/**
+ * Corrige cadastros e copias historicas criadas antes da separacao entre
+ * oportunidade e contato. A chamada e administrativa, idempotente e nao
+ * altera dados de visita, localizacao ou feedback.
+ */
+exports.normalizeCustomerPrimaryNames = onCall(
+  { region: REGION, timeoutSeconds: 120, memory: '512MiB', maxInstances: 1 },
+  async (request) => {
+    try {
+      await requireActiveAdmin(request);
+      const [
+        customersSnapshot,
+        plannedStopsSnapshot,
+        sharedRoutesSnapshot,
+        visitEventsSnapshot,
+        visitAttendancesSnapshot,
+      ] = await Promise.all([
+        database.ref('customers').get(),
+        database.ref('plannedRouteStops').get(),
+        database.ref('sharedRoutesBySeller').get(),
+        database.ref('visitEvents').get(),
+        database.ref('visitAttendances').get(),
+      ]);
+
+      const customers = customersSnapshot.val() || {};
+      const customerIndex = buildCustomerNameIndex(customers);
+      const updates = {};
+      const counts = { customersUpdated: 0, snapshotsUpdated: 0 };
+
+      Object.entries(customers).forEach(([customerId, customer]) => {
+        const primaryName = primaryCustomerName(customer);
+        if (primaryName && textValue(customer?.name) !== primaryName) {
+          updates[`customers/${customerId}/name`] = primaryName;
+          counts.customersUpdated += 1;
+        }
+      });
+
+      [
+        ['plannedRouteStops', plannedStopsSnapshot.val()],
+        ['sharedRoutesBySeller', sharedRoutesSnapshot.val()],
+        ['visitEvents', visitEventsSnapshot.val()],
+        ['visitAttendances', visitAttendancesSnapshot.val()],
+      ].forEach(([path, node]) => normalizeSnapshotNames(node, path, customerIndex, updates, counts));
+
+      const entries = Object.entries(updates);
+      for (let index = 0; index < entries.length; index += 350) {
+        await database.ref().update(Object.fromEntries(entries.slice(index, index + 350)));
+      }
+
+      logger.info('Normalizacao de nomes principais concluida.', {
+        customersUpdated: counts.customersUpdated,
+        snapshotsUpdated: counts.snapshotsUpdated,
+        fieldsUpdated: entries.length,
+      });
+      return { ...counts, fieldsUpdated: entries.length };
     } catch (error) {
       throw toFunctionError(error);
     }

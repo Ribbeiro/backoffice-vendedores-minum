@@ -14,11 +14,21 @@ const {
   compareReverseAddress,
   validateMapboxResponse,
 } = require('./mapboxGeocoder');
+const { toFirebaseSafeValue } = require('./firebaseSafeData');
+const {
+  PRESERVED_COORDINATE_FIELDS,
+  canonicalAddressKeyForCustomer,
+  coordinateReviewSnapshot,
+  isCoordinateReviewLocked,
+  preserveCoordinateReview,
+} = require('./coordinateReview');
 
 const TARGET_HEADERS = Object.freeze([
   'Opportunity',
   '(CPF/CNPJ)',
   'ID',
+  'Odoo Lead ID',
+  'Odoo External ID',
   'Deal - Address',
   'Client - Email',
   'Client - State',
@@ -45,9 +55,25 @@ const HEADER_ALIASES = [
   ['Opportunity', 'Opportunity'],
   ['CPF/CNPJ', '(CPF/CNPJ)'],
   ['(CPF/CNPJ)', '(CPF/CNPJ)'],
+  // O export do Odoo contem dois identificadores diferentes. O codigo Minum
+  // continua em ID para preservar a chave legada do Firebase; o ID tecnico
+  // do crm.lead nunca pode sobrescreve-lo.
   ['Codigo do sistema MINUM', 'ID'],
   ['Código do sistema MINUM', 'ID'],
-  ['ID', 'ID'],
+  ['Minum Code', 'ID'],
+  ['ID', 'Odoo Lead ID'],
+  ['Odoo Lead ID', 'Odoo Lead ID'],
+  ['Odoo Lead Id', 'Odoo Lead ID'],
+  ['CRM Lead ID', 'Odoo Lead ID'],
+  ['CRM Lead Id', 'Odoo Lead ID'],
+  ['ID tecnico do Odoo', 'Odoo Lead ID'],
+  ['ID técnico do Odoo', 'Odoo Lead ID'],
+  ['External ID', 'Odoo External ID'],
+  ['External Id', 'Odoo External ID'],
+  ['Odoo External ID', 'Odoo External ID'],
+  ['Odoo External Id', 'Odoo External ID'],
+  ['ID externo do Odoo', 'Odoo External ID'],
+  ['ID externo', 'Odoo External ID'],
   ['Endereco', 'Deal - Address'],
   ['Endereço', 'Deal - Address'],
   ['Deal - Address', 'Deal - Address'],
@@ -96,6 +122,11 @@ const HEADER_ALIASES = [
 
 const HEADER_MAP = new Map(HEADER_ALIASES.map(([source, target]) => [normalizeHeader(source), target]));
 
+// Esta e a assinatura da exportacao direta de crm.lead feita pelo Odoo.
+// Ela nao contem o codigo Minum nem latitude/longitude, portanto precisa ser
+// adaptada antes de seguir pelo mesmo fluxo auditavel do modelo Minum.
+const RAW_ODOO_REQUIRED_HEADERS = Object.freeze(['id', 'name', 'street', 'tagids']);
+
 class ProcessorError extends Error {
   constructor(code, message) {
     super(message);
@@ -120,6 +151,48 @@ function identifierAsText(value) {
   if (!text) return '';
   if (/^\d+\.0+$/.test(text)) return text.replace(/\.0+$/, '');
   return text;
+}
+
+/** Extrai o ID numerico de "__export__.crm_lead_64208_xxx" sem adivinhar valores. */
+function extractOdooLeadId(value) {
+  const identifier = identifierAsText(value);
+  const direct = odooLeadIdOrNull(identifier);
+  if (direct) return String(direct);
+
+  const match = identifier.match(/(?:^|[._-])crm[_-]?lead[_-](\d+)(?:[._-]|$)/i);
+  return match?.[1] || '';
+}
+
+/** A exportacao pura nao possui codigo Minum; o ID do crm.lead vira a chave estavel. */
+function odooImportStableId(odooLeadId, odooExternalId) {
+  if (odooLeadId) return `odoo_lead_${odooLeadId}`;
+  const fallback = identifierAsText(odooExternalId)
+    .replace(/[^a-zA-Z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 120);
+  return fallback ? `odoo_external_${fallback}` : '';
+}
+
+function cleanOdooOpportunity(value) {
+  return cleanCell(value).replace(/^(?:true|false)\s*[-:]\s*/i, '').trim();
+}
+
+function extractCoordinatesFromNotes(value) {
+  const text = cleanCell(value);
+  const match = text.match(/(?:coordenadas?|coordinates?)\s*:\s*(-?\d{1,2}(?:[.,]\d+)?)\s*[,;\s]\s*(-?\d{1,3}(?:[.,]\d+)?)/i);
+  if (!match) return null;
+
+  const latitude = Number(match[1].replace(',', '.'));
+  const longitude = Number(match[2].replace(',', '.'));
+  return isValidCoordinates(latitude, longitude) ? { latitude, longitude } : null;
+}
+
+/** Mantem o ID tecnico do crm.lead como inteiro apenas quando ele e valido. */
+function odooLeadIdOrNull(value) {
+  const identifier = identifierAsText(value);
+  if (!/^\d+$/.test(identifier)) return null;
+  const parsed = Number(identifier);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function numberOrNull(value) {
@@ -175,6 +248,9 @@ function createAudit(record, stage, status, details, fields = [], source = '') {
   return {
     row: record?.__meta?.sourceRows?.join(', ') || null,
     id: cleanCell(record?.ID),
+    minumCode: cleanCell(record?.ID),
+    odooLeadId: identifierAsText(record?.['Odoo Lead ID']),
+    odooExternalId: identifierAsText(record?.['Odoo External ID']),
     opportunity: cleanCell(record?.Opportunity),
     stage,
     status,
@@ -211,17 +287,97 @@ function chooseWorksheet(workbook) {
   return workbook.Sheets[preferred];
 }
 
+function hasHeaders(headers, requiredHeaders) {
+  const available = new Set(headers.map(normalizeHeader));
+  return requiredHeaders.every((header) => available.has(header));
+}
+
+function inputFormatFor(headers, targetByColumn) {
+  if (hasHeaders(headers, RAW_ODOO_REQUIRED_HEADERS)) return 'odoo_raw_export';
+  if (targetByColumn.includes('Opportunity') && targetByColumn.includes('ID')) return 'minum_model';
+  return 'unknown';
+}
+
+/**
+ * O modelo atual traz as duas colunas "ID" (codigo Minum) e "Odoo Lead ID".
+ * Em exportacoes legadas, "Codigo do sistema MINUM" existe e o "ID" puro era
+ * o identificador tecnico do Odoo. A leitura e contextual para aceitar ambos.
+ */
+function targetColumnsFor(headers) {
+  const normalizedHeaders = headers.map(normalizeHeader);
+  const hasSeparateMinumCode = normalizedHeaders.some((header) => [
+    'codigodosistemaminum',
+    'minumcode',
+  ].includes(header));
+
+  return normalizedHeaders.map((header) => {
+    if (header === 'id') return hasSeparateMinumCode ? 'Odoo Lead ID' : 'ID';
+    return HEADER_MAP.get(header) || null;
+  });
+}
+
+function rawOdooValues(headers, row) {
+  return Object.fromEntries(headers.map((header, column) => [normalizeHeader(header), cleanCell(row[column])]));
+}
+
+/** Converte a linha direta do Odoo para o modelo interno sem perder a origem. */
+function createRecordFromRawOdoo(headers, row, rowNumber) {
+  const values = rawOdooValues(headers, row);
+  const record = createRecord(rowNumber);
+  const odooExternalId = identifierAsText(values.id);
+  const odooLeadId = extractOdooLeadId(odooExternalId);
+  const location = normalizeCityAndState(values.city, values.stateidname);
+  const sourceCoordinates = extractCoordinatesFromNotes(values.description);
+
+  record.Opportunity = cleanOdooOpportunity(values.name);
+  record['(CPF/CNPJ)'] = identifierAsText(values.cpfcnpjnumber);
+  record.ID = odooImportStableId(odooLeadId, odooExternalId);
+  record['Odoo Lead ID'] = odooLeadId;
+  record['Odoo External ID'] = odooExternalId;
+  record['Deal - Address'] = cleanCell(values.street);
+  record['Client - Email'] = cleanCell(values.emailfrom);
+  record['Client - State'] = location.region;
+  record.Cidade = location.place;
+  record['Client - Phone'] = identifierAsText(values.phone);
+  record['Deal - Segment'] = cleanCell(values.segment);
+  record.Responsavel = cleanCell(values.useridname);
+  record['Deal - Responsable Salesperson'] = cleanCell(values.useridname);
+  record['Deal - Distributor'] = cleanCell(values.distributioncompany);
+  record['Deal - Tags'] = uniquePreservingOrder(splitTags(values.tagids)).join(', ');
+  record['Deal - Expected Revenue'] = cleanCell(values.expectedrevenue);
+  record['Deal - Notes'] = cleanCell(values.description);
+  record['Deal - Origem'] = cleanCell(values.sourceid);
+  record['Deal - Pipeline Stage'] = cleanCell(values.stageid);
+  record['Client - Name'] = cleanCell(values.contactname) || record.Opportunity;
+  record.Country = cleanCell(values.countryid) || 'Brasil';
+
+  if (sourceCoordinates) {
+    record.latitude = sourceCoordinates.latitude;
+    record.longitude = sourceCoordinates.longitude;
+    record.__meta.sourceLatitude = sourceCoordinates.latitude;
+    record.__meta.sourceLongitude = sourceCoordinates.longitude;
+    record.__meta.coordinateSource = 'Descricao da exportacao Odoo';
+  }
+
+  record.__meta.inputFormat = 'odoo_raw_export';
+  record.__meta.idSource = odooLeadId ? 'odoo_technical_id' : 'odoo_external_id';
+  record.__meta.odooLinkStatus = odooLeadId ? 'linked' : 'missing_technical_id';
+  record.__meta.originalOdooOpportunity = cleanCell(values.name);
+  return record;
+}
+
 function readAndConsolidate(buffer, fileName) {
   const workbook = XLSX.read(buffer, { type: 'buffer', raw: false, cellText: true, cellDates: true });
   const sheet = chooseWorksheet(workbook);
   const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false, blankrows: false });
   const headers = matrix[0] || [];
-  const targetByColumn = headers.map((header) => HEADER_MAP.get(normalizeHeader(header)) || null);
-  const tagColumns = targetByColumn
-    .map((target, index) => (target === 'Deal - Tags' ? index : -1))
-    .filter((index) => index >= 0);
+  const targetByColumn = targetColumnsFor(headers);
+  const inputFormat = inputFormatFor(headers, targetByColumn);
+  const tagColumns = inputFormat === 'odoo_raw_export'
+    ? headers.map((header, index) => (normalizeHeader(header) === 'tagids' ? index : -1)).filter((index) => index >= 0)
+    : targetByColumn.map((target, index) => (target === 'Deal - Tags' ? index : -1)).filter((index) => index >= 0);
 
-  if (!targetByColumn.includes('Opportunity') || !targetByColumn.includes('ID')) {
+  if (inputFormat === 'unknown') {
     throw new ProcessorError('invalid-argument', 'A planilha não contém as colunas Oportunidade e Código do sistema MINUM/ID esperadas.');
   }
 
@@ -272,11 +428,15 @@ function readAndConsolidate(buffer, fileName) {
       continue;
     }
 
-    const record = createRecord(index + 1);
-    targetByColumn.forEach((target, column) => {
-      if (!target) return;
-      record[target] = cleanCell(row[column]);
-    });
+    const record = inputFormat === 'odoo_raw_export'
+      ? createRecordFromRawOdoo(headers, row, index + 1)
+      : createRecord(index + 1);
+    if (inputFormat !== 'odoo_raw_export') {
+      targetByColumn.forEach((target, column) => {
+        if (!target) return;
+        record[target] = cleanCell(row[column]);
+      });
+    }
     record.Opportunity = cleanCell(record.Opportunity);
     record.ID = identifierAsText(record.ID);
     record['(CPF/CNPJ)'] = identifierAsText(record['(CPF/CNPJ)']);
@@ -306,6 +466,7 @@ function readAndConsolidate(buffer, fileName) {
     records,
     audit,
     stats: {
+      inputFormat,
       sourceRows: populatedRows,
       extraTagRows,
       orphanTagRows,
@@ -341,9 +502,12 @@ function validateRecords(records, audit) {
 
 function getCustomerReference(customer) {
   return {
+    __key: cleanCell(customer.id),
     Opportunity: cleanCell(customer.opportunity || customer.name || customer.clientName),
     '(CPF/CNPJ)': identifierAsText(customer.cpfCnpj || customer.cnpjCpf),
-    ID: identifierAsText(customer.externalId || customer.id),
+    ID: identifierAsText(customer.minumCode || customer.externalId || customer.id),
+    'Odoo Lead ID': identifierAsText(customer.odooLeadId),
+    'Odoo External ID': identifierAsText(customer.odooExternalId),
     'Deal - Address': cleanCell(customer.dealAddress || customer.address),
     'Client - Email': cleanCell(customer.email),
     'Client - State': cleanCell(customer.state),
@@ -363,21 +527,30 @@ function getCustomerReference(customer) {
     latitude: isValidCoordinates(customer.latitude, customer.longitude) ? Number(customer.latitude) : '',
     longitude: isValidCoordinates(customer.latitude, customer.longitude) ? Number(customer.longitude) : '',
     Country: cleanCell(customer.country) || 'Brasil',
+    __coordinateReviewLocked: isCoordinateReviewLocked(
+      customer,
+      customer.canonicalKey || canonicalAddressKeyForCustomer(customer),
+    ),
+    __coordinateReviewSnapshot: coordinateReviewSnapshot(customer),
   };
 }
 
 function buildReferenceIndex(customers) {
   const byId = new Map();
   const byDocument = new Map();
+  const byOdooLeadId = new Map();
+  const byOdooExternalId = new Map();
 
   Object.entries(customers || {}).forEach(([key, customer]) => {
     const reference = getCustomerReference({ id: key, ...customer });
     if (reference.ID) byId.set(reference.ID, reference);
     const document = onlyDigits(reference['(CPF/CNPJ)']);
     if (document) byDocument.set(document, reference);
+    if (reference['Odoo Lead ID']) byOdooLeadId.set(reference['Odoo Lead ID'], reference);
+    if (reference['Odoo External ID']) byOdooExternalId.set(reference['Odoo External ID'], reference);
   });
 
-  return { byId, byDocument };
+  return { byId, byDocument, byOdooLeadId, byOdooExternalId };
 }
 
 function applyMissingValues(record, values, allowedFields = TARGET_HEADERS) {
@@ -397,25 +570,49 @@ function applyMissingValues(record, values, allowedFields = TARGET_HEADERS) {
 
 function applyReference(record, references, audit) {
   const document = onlyDigits(record['(CPF/CNPJ)']);
-  const reference = references.byId.get(record.ID) || (document ? references.byDocument.get(document) : null);
+  const odooLeadId = identifierAsText(record['Odoo Lead ID']);
+  const odooExternalId = identifierAsText(record['Odoo External ID']);
+  const reference = (odooLeadId ? references.byOdooLeadId.get(odooLeadId) : null)
+    || (odooExternalId ? references.byOdooExternalId.get(odooExternalId) : null)
+    || references.byId.get(record.ID)
+    || (document ? references.byDocument.get(document) : null);
   if (!reference) return;
+
+  // A referencia e usada apenas no commit para atualizar o mesmo cliente em
+  // vez de duplicar uma oportunidade que ja possui uma chave legada Minum.
+  record.__meta.matchedCustomerKey = reference.__key || null;
+
+  // Uma revisao humana nao pode ser apagada por uma nova exportacao do Odoo.
+  // O endereco sera comparado na etapa de geocodificacao; se mudou, a
+  // coordenada volta naturalmente para a fila de revisao.
+  if (reference.__coordinateReviewLocked && reference.__coordinateReviewSnapshot) {
+    record.__meta.existingCoordinateReview = reference.__coordinateReviewSnapshot;
+  }
 
   const filled = applyMissingValues(record, reference);
   if (!isValidCoordinates(record.latitude, record.longitude) && isValidCoordinates(reference.latitude, reference.longitude)) {
     record.latitude = Number(reference.latitude);
     record.longitude = Number(reference.longitude);
 
-    // Seção 3.4 do prompt: Coordenadas antigas do Firebase não se transformam automaticamente em confirmed
-    record.__meta.coordinateStatus = 'legacy_unverified';
-    record.__meta.coordinatePrecisionLevel = 'legacy_unverified';
-    record.__meta.coordinateSource = 'Firebase customers';
+    if (record.__meta.existingCoordinateReview) {
+      const reviewed = record.__meta.existingCoordinateReview;
+      record.__meta.coordinateStatus = reviewed.coordinateStatus;
+      record.__meta.coordinatePrecisionLevel = reviewed.coordinatePrecisionLevel;
+      record.__meta.coordinateSource = reviewed.coordinateSource;
+      record.__meta.geocodingReview = reviewed.geocodingReview || null;
+    } else {
+      // Coordenadas antigas do Firebase nao se tornam confirmed automaticamente.
+      record.__meta.coordinateStatus = 'legacy_unverified';
+      record.__meta.coordinatePrecisionLevel = 'legacy_unverified';
+      record.__meta.coordinateSource = 'Firebase customers';
+    }
     filled.push('latitude', 'longitude');
   }
 
   if (filled.length) {
     appendSource(record, 'Firebase customers');
     updateResearchStatus(record, 'confirmed');
-    audit.push(createAudit(record, 'reference', 'FILLED', 'Campos vazios reaproveitados de um cliente já existente no Firebase com o mesmo ID ou CPF/CNPJ.', filled, 'Firebase customers'));
+    audit.push(createAudit(record, 'reference', 'FILLED', 'Campos vazios reaproveitados de um cliente já existente no Firebase com o mesmo ID, lead Odoo, ID externo ou CPF/CNPJ.', filled, 'Firebase customers'));
   }
 }
 
@@ -521,12 +718,47 @@ async function enrichCoordinates(record, geocodeClient, audit, enabled) {
   record.__meta.canonicalKey = key;
   record.__meta.parsedAddress = parsedAddress;
 
+  const existingReview = record.__meta.existingCoordinateReview;
+  if (existingReview && (!existingReview.canonicalKey || existingReview.canonicalKey === key)) {
+    // A mesma oportunidade e o mesmo endereco ja foram aprovados. Reutilizar
+    // a coordenada evita nova consulta paga e conserva a decisao administrativa.
+    record.latitude = existingReview.latitude;
+    record.longitude = existingReview.longitude;
+    record.__meta.navigationLatitude = existingReview.navigationLatitude;
+    record.__meta.navigationLongitude = existingReview.navigationLongitude;
+    record.__meta.entranceLatitude = existingReview.entranceLatitude;
+    record.__meta.entranceLongitude = existingReview.entranceLongitude;
+    record.__meta.geocodedLatitude = existingReview.geocodedLatitude;
+    record.__meta.geocodedLongitude = existingReview.geocodedLongitude;
+    record.__meta.coordinateStatus = existingReview.coordinateStatus;
+    record.__meta.coordinatePrecisionLevel = existingReview.coordinatePrecisionLevel;
+    record.__meta.coordinateSource = existingReview.coordinateSource;
+    record.__meta.geocodingReview = existingReview.geocodingReview || null;
+    record.__meta.geocoding = {
+      ...(existingReview.geocoding || {}),
+      status: existingReview.coordinateStatus,
+      reason: 'Coordenada previamente aprovada para este mesmo endereco; consulta Mapbox nao repetida.',
+      preservedAtImport: true,
+    };
+    appendSource(record, 'Firebase customers (coordenada aprovada)');
+    updateResearchStatus(record, 'confirmed');
+    audit.push(createAudit(
+      record,
+      'coordinate_reuse',
+      'OK',
+      'Coordenada previamente aprovada foi preservada para o mesmo endereco; nenhuma nova consulta Mapbox foi feita.',
+      ['latitude', 'longitude'],
+      'Firebase customers',
+    ));
+    return;
+  }
+
   // Se já possui coordenadas na planilha (Odoo), inicializa como legacy_unverified se ainda não revalidado
   if (isValidCoordinates(record.latitude, record.longitude)) {
     if (record.__meta.coordinateStatus === 'missing') {
       record.__meta.coordinateStatus = 'legacy_unverified';
       record.__meta.coordinatePrecisionLevel = 'legacy_unverified';
-      record.__meta.coordinateSource = 'Planilha Odoo';
+      record.__meta.coordinateSource = record.__meta.coordinateSource || 'Planilha Odoo';
       record.__meta.sourceLatitude = Number(record.latitude);
       record.__meta.sourceLongitude = Number(record.longitude);
     }
@@ -601,6 +833,8 @@ async function enrichCoordinates(record, geocodeClient, audit, enabled) {
     record.__meta.geocodedLongitude = result.longitude;
     record.__meta.navigationLatitude = result.navigationLatitude;
     record.__meta.navigationLongitude = result.navigationLongitude;
+    record.__meta.entranceLatitude = result.entranceLatitude;
+    record.__meta.entranceLongitude = result.entranceLongitude;
     record.__meta.coordinatePrecisionLevel = result.accuracy || 'unknown';
     record.__meta.providerReturnedAddress = result.label;
     record.__meta.geocoding = {
@@ -716,6 +950,8 @@ async function processOdooWorkbook(buffer, {
   const summary = {
     ...stats,
     blockingIssues,
+    odooLeadsLinked: records.filter((record) => Boolean(odooLeadIdOrNull(record['Odoo Lead ID']))).length,
+    odooLeadsMissing: records.filter((record) => !odooLeadIdOrNull(record['Odoo Lead ID'])).length,
     coordinatesConfirmed: records.filter((record) => record.__meta?.coordinateStatus === 'confirmed').length,
     coordinatesMissing: records.filter((record) => !isValidCoordinates(record.latitude, record.longitude)).length,
     ...auditSummary(audit),
@@ -738,20 +974,34 @@ function toFirebaseKey(value) {
     .slice(0, 180);
 }
 
-function buildFirebaseCustomer(record, { jobId, importedBy, importedAt }) {
+function buildFirebaseCustomer(record, { jobId, importedBy, importedAt, minumCodeOverride = null }) {
   const hasCoordinates = isValidCoordinates(record.latitude, record.longitude);
   const meta = record.__meta || {};
+  const minumCode = identifierAsText(minumCodeOverride || record.ID);
+  const odooLeadId = odooLeadIdOrNull(record['Odoo Lead ID']);
+  const odooExternalId = identifierAsText(record['Odoo External ID']);
+  const location = normalizeCityAndState(record.Cidade, record['Client - State']);
+  // Odoo separa claramente a oportunidade do contato. A oportunidade deve
+  // ser o titulo apresentado no app e no backoffice; o contato permanece em
+  // clientName para telefone, abordagem e historico comercial.
+  const opportunity = cleanCell(record.Opportunity);
+  const clientName = cleanCell(record['Client - Name']);
 
   return {
-    opportunity: cleanCell(record.Opportunity),
+    opportunity,
     cpfCnpj: identifierAsText(record['(CPF/CNPJ)']),
     cnpjCpf: identifierAsText(record['(CPF/CNPJ)']),
-    externalId: identifierAsText(record.ID),
+    // externalId permanece como alias legado do codigo Minum. Isso preserva
+    // chaves de customers, rotas e dados historicos ja publicados.
+    externalId: minumCode,
+    minumCode,
+    odooLeadId,
+    odooExternalId,
     dealAddress: cleanCell(record['Deal - Address']),
     address: cleanCell(record['Deal - Address']),
     email: cleanCell(record['Client - Email']),
-    state: cleanCell(record['Client - State']).toUpperCase(),
-    city: cleanCell(record.Cidade),
+    state: location.region || cleanCell(record['Client - State']).toUpperCase(),
+    city: location.place || cleanCell(record.Cidade),
     phone: identifierAsText(record['Client - Phone']),
     segment: cleanCell(record['Deal - Segment']),
     responsible: cleanCell(record.Responsavel),
@@ -769,8 +1019,8 @@ function buildFirebaseCustomer(record, { jobId, importedBy, importedAt }) {
     origem: cleanCell(record['Deal - Origem']),
     pipelineStage: cleanCell(record['Deal - Pipeline Stage']),
     status: cleanCell(record['Deal - Pipeline Stage']),
-    name: cleanCell(record['Client - Name']) || cleanCell(record.Opportunity) || identifierAsText(record.ID),
-    clientName: cleanCell(record['Client - Name']),
+    name: opportunity || clientName || minumCode,
+    clientName,
 
     // Coordenadas Geográficas Principais
     latitude: hasCoordinates ? Number(record.latitude) : 0,
@@ -779,6 +1029,8 @@ function buildFirebaseCustomer(record, { jobId, importedBy, importedAt }) {
     // Ponto de Navegação Veicular (Routable Point)
     navigationLatitude: meta.navigationLatitude ?? (hasCoordinates ? Number(record.latitude) : 0),
     navigationLongitude: meta.navigationLongitude ?? (hasCoordinates ? Number(record.longitude) : 0),
+    entranceLatitude: meta.entranceLatitude ?? null,
+    entranceLongitude: meta.entranceLongitude ?? null,
 
     // Proveniência e Detalhes
     sourceLatitude: meta.sourceLatitude ?? null,
@@ -805,15 +1057,22 @@ function buildFirebaseCustomer(record, { jobId, importedBy, importedAt }) {
       geocodedCoordinate: null,
       navigationCoordinate: hasCoordinates ? { latitude: Number(record.latitude), longitude: Number(record.longitude) } : null,
     },
+    geocodingReview: meta.geocodingReview || null,
 
     country: cleanCell(record.Country) || 'Brasil',
     active: true,
-    raw: Object.fromEntries(TARGET_HEADERS.map((header) => [header, record[header] ?? ''])),
+    // "(CPF/CNPJ)" e alguns cabecalhos externos contem caracteres que o
+    // Realtime Database nao aceita como chave. O valor continua preservado,
+    // apenas a representacao interna e codificada para armazenamento seguro.
+    raw: toFirebaseSafeValue(Object.fromEntries(TARGET_HEADERS.map((header) => [header, record[header] ?? '']))),
     importMetadata: {
       source: 'odoo_raw_export',
       jobId,
       importedBy,
       importedAt,
+      inputFormat: meta.inputFormat || 'minum_model',
+      odooLinkStatus: meta.odooLinkStatus || (odooLeadId ? 'linked' : 'missing_technical_id'),
+      idSource: meta.idSource || 'minum_code',
       researchStatus: meta.researchStatus || 'not_checked',
       researchSources: meta.researchSources || [],
       coordinateStatus: meta.coordinateStatus || 'missing',
@@ -826,6 +1085,7 @@ function buildFirebaseCustomer(record, { jobId, importedBy, importedAt }) {
 
 function mergeCustomer(existing, incoming) {
   const merged = { ...(existing || {}) };
+  const preserveReviewedCoordinate = preserveCoordinateReview(existing, incoming);
   Object.entries(incoming).forEach(([key, value]) => {
     if (key === 'raw' || key === 'importMetadata') return;
     const incomingHasCoordinate = (key === 'latitude' || key === 'longitude') && Number(value) !== 0;
@@ -834,6 +1094,21 @@ function mergeCustomer(existing, incoming) {
   });
   merged.raw = { ...(existing?.raw || {}), ...(incoming.raw || {}) };
   merged.importMetadata = incoming.importMetadata;
+
+  if (preserveReviewedCoordinate) {
+    PRESERVED_COORDINATE_FIELDS.forEach((field) => {
+      if (Object.prototype.hasOwnProperty.call(existing || {}, field)) {
+        merged[field] = existing[field];
+      }
+    });
+    merged.importMetadata = {
+      ...(incoming.importMetadata || {}),
+      coordinateStatus: existing.coordinateStatus || incoming.importMetadata?.coordinateStatus || 'confirmed',
+      coordinateSource: existing.coordinateSource || incoming.importMetadata?.coordinateSource || null,
+      coordinatePrecisionLevel: existing.coordinatePrecisionLevel || incoming.importMetadata?.coordinatePrecisionLevel || 'unknown',
+      coordinateReviewPreserved: true,
+    };
+  }
   return merged;
 }
 

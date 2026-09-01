@@ -3,6 +3,7 @@ import { Alert, Box, CircularProgress, Typography, useTheme } from '@mui/materia
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import { minumTokens } from '../design/tokens';
+import { customerPrimaryName } from '../utils/customerDisplay';
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN;
 const ROUTE_SOURCE_ID = 'shared-route-preview';
@@ -117,7 +118,7 @@ function updateMarkers(map, customers, markersRef) {
     const markerElement = document.createElement('button');
     markerElement.type = 'button';
     markerElement.textContent = String(index + 1);
-    markerElement.title = customer.name || customer.clientName || customer.opportunity || `Parada ${index + 1}`;
+    markerElement.title = customerPrimaryName(customer, `Parada ${index + 1}`);
     markerElement.style.cssText = [
       'width:30px',
       'height:30px',

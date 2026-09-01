@@ -17,6 +17,7 @@ import { asArray } from '../utils/helpers';
 import { formatDate, formatDateTime } from '../utils/formatters';
 import { formatTelemetryDistance, formatTelemetryDuration, formatTelemetryVariance } from '../utils/routeTelemetry';
 import { attendancesForStop, attendanceDurationSeconds } from '../utils/routeAttendances';
+import { stopPrimaryName } from '../utils/customerDisplay';
 
 /** Drawer padrao para consulta de uma rota sem forcar a operacao a abrir outra tela. */
 export default function RouteDetailsDrawer({
@@ -108,7 +109,7 @@ export default function RouteDetailsDrawer({
                       {stop.order || index + 1}
                     </Box>
                     <ListItemText
-                      primary={stop.customerName || stop.clientName || stop.name || customerKey}
+                      primary={stopPrimaryName(stop, null, customerKey)}
                       primaryTypographyProps={{ fontWeight: 700, variant: 'body2' }}
                       secondary={[
                         [stop.city, stop.state].filter(Boolean).join(' - '),

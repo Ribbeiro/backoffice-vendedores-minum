@@ -13,6 +13,10 @@ const {
   isFiniteCoordinate,
   validateMapboxResponse,
 } = require('./mapboxGeocoder');
+const {
+  isConfirmedCoordinateStatus,
+  isCoordinateReviewLocked,
+} = require('./coordinateReview');
 
 const DUPLICATE_DISTANCE_METERS = 5;
 const FIELD_GROUND_TRUTH_MAX_ACCURACY_METERS = 100;
@@ -95,6 +99,29 @@ function parsedCustomer(customer = {}) {
     customer.state || '',
     customer.country || 'Brasil',
   );
+}
+
+function canonicalKeyForParsedAddress(parsed) {
+  return canonicalKey(
+    parsed.street,
+    parsed.houseNumber,
+    parsed.place,
+    parsed.region,
+    parsed.postcode,
+    parsed.country,
+    parsed.neighborhood,
+  );
+}
+
+/** Seleciona apenas pendencias ou enderecos alterados, salvo auditoria total. */
+function selectCustomerIdsForAudit(customers = {}, { includeReviewed = false } = {}) {
+  return Object.entries(customers)
+    .filter(([, customer]) => {
+      if (includeReviewed) return true;
+      const parsed = parsedCustomer(customer);
+      return !isCoordinateReviewLocked(customer, canonicalKeyForParsedAddress(parsed));
+    })
+    .map(([id]) => id);
 }
 
 /** Detecta coordenadas iguais ou a <=5 m somente entre enderecos canonicos distintos. */
@@ -244,26 +271,62 @@ function baseAuditResult(id, customer, parsed, duplicateGroup, fieldGroundTruth)
     fieldGroundTruthCandidateDistanceMeters: null,
     candidateVerified: false,
     approvalEligible: false,
+    reviewLocked: false,
+    lookupSkipped: false,
+    reviewStatus: customer.geocodingReview?.status || null,
     motivo: 'Aguardando auditoria.',
     geocoding: null,
   };
+}
+
+function retainApprovedCoordinate(recordResult, customer) {
+  recordResult.reviewLocked = true;
+  recordResult.lookupSkipped = true;
+  recordResult.coordinateStatus = customer.coordinateStatus;
+  recordResult.coordinatePrecisionLevel = customer.coordinatePrecisionLevel || recordResult.coordinatePrecisionLevel;
+  recordResult.coordinateSource = customer.coordinateSource || recordResult.coordinateSource;
+  recordResult.reviewStatus = customer.geocodingReview?.status
+    || (customer.coordinateStatus === 'manual_confirmed' ? 'manual' : 'approved');
+  recordResult.candidateVerified = isConfirmedCoordinateStatus(customer.coordinateStatus);
+  recordResult.approvalEligible = false;
+  recordResult.motivo = 'Coordenada previamente aprovada para este mesmo endereco; nao consultada novamente.';
+  recordResult.geocoding = {
+    ...(customer.geocoding || {}),
+    status: customer.coordinateStatus,
+    reason: recordResult.motivo,
+    preservedFromReview: true,
+  };
+  return recordResult;
 }
 
 /**
  * Retorna resultados de auditoria sem atualizar customers. A aplicacao so e
  * feita por uma Cloud Function administrativa depois da escolha humana.
  */
-async function auditExistingCustomers({ customers = {}, visitEventsByCustomer = {}, mapboxGeocoderClient = null, customerIds = null }) {
+async function auditExistingCustomers({
+  customers = {},
+  visitEventsByCustomer = {},
+  mapboxGeocoderClient = null,
+  customerIds = null,
+  includeReviewed = false,
+}) {
   const duplicateCollisions = detectDuplicateCoordinates(customers);
   const ids = (customerIds || Object.keys(customers)).filter((id) => customers[id]);
   const entries = ids.map((id) => {
     const customer = customers[id];
     const parsed = parsedCustomer(customer);
+    const currentCanonicalKey = canonicalKeyForParsedAddress(parsed);
     const eventKeys = [id, customer.id, customer.externalId].filter((key) => key !== undefined && key !== null).map(String);
     const fieldGroundTruth = calculateCheckinGroundTruth(eventKeys.flatMap((key) => visitEventsByCustomer[key] || []));
-    return { id, customer, parsed, fieldGroundTruth };
+    return {
+      id,
+      customer,
+      parsed,
+      currentCanonicalKey,
+      fieldGroundTruth,
+      reviewLocked: !includeReviewed && isCoordinateReviewLocked(customer, currentCanonicalKey),
+    };
   });
-  const geocoded = await geocodeBatch(entries.map((entry) => entry.parsed), mapboxGeocoderClient);
 
   const results = entries.map((entry, index) => baseAuditResult(
     entry.id,
@@ -273,8 +336,24 @@ async function auditExistingCustomers({ customers = {}, visitEventsByCustomer = 
     entry.fieldGroundTruth,
   ));
 
+  // Coordenadas confirmadas para o mesmo endereco nao devem gerar novas
+  // consultas ao Mapbox. Apenas pendencias e enderecos alterados seguem para
+  // a geocodificacao desta auditoria.
+  const lookupIndexes = entries
+    .map((entry, index) => (entry.reviewLocked ? null : index))
+    .filter((index) => index !== null);
+  const lookupResults = await geocodeBatch(
+    lookupIndexes.map((index) => entries[index].parsed),
+    mapboxGeocoderClient,
+  );
+  const geocoded = new Array(entries.length).fill(null);
+  lookupIndexes.forEach((index, lookupIndex) => {
+    geocoded[index] = lookupResults[lookupIndex] || null;
+  });
+
   await mapWithConcurrency(results, REVERSE_CONCURRENCY, async (recordResult, index) => {
-    const { customer, parsed, fieldGroundTruth } = entries[index];
+    const { customer, parsed, fieldGroundTruth, reviewLocked } = entries[index];
+    if (reviewLocked) return retainApprovedCoordinate(recordResult, customer);
     const result = geocoded[index];
     if (fieldGroundTruth?.eligible && recordResult.currentCoordinate) {
       recordResult.fieldGroundTruthDistanceMeters = calculateHaversineDistanceMeters(
@@ -371,11 +450,14 @@ function summarizeAudit(results = []) {
     summary[item.coordinateStatus] = (summary[item.coordinateStatus] || 0) + 1;
     return summary;
   }, {});
+  const retained = results.filter((item) => item.reviewLocked).length;
+  const confirmed = results.filter((item) => item.reviewLocked || isConfirmedCoordinateStatus(item.coordinateStatus)).length;
   return {
     total: results.length,
-    confirmed: byStatus.confirmed || 0,
+    confirmed,
+    retained,
     approvalEligible: results.filter((item) => item.approvalEligible).length,
-    needsReview: results.filter((item) => item.coordinateStatus !== 'confirmed').length,
+    needsReview: results.filter((item) => !item.reviewLocked && !isConfirmedCoordinateStatus(item.coordinateStatus)).length,
     missingCoordinate: byStatus.missing_coordinate || 0,
     duplicateCoordinateDistinctAddress: byStatus.duplicate_coordinate_distinct_address || 0,
     reverseMismatch: byStatus.reverse_mismatch || 0,
@@ -391,5 +473,6 @@ module.exports = {
   auditExistingCustomers,
   calculateCheckinGroundTruth,
   detectDuplicateCoordinates,
+  selectCustomerIdsForAudit,
   summarizeAudit,
 };

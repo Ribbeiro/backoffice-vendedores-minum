@@ -27,6 +27,7 @@ import DashboardIcon from '@mui/icons-material/Dashboard';
 import DarkModeOutlinedIcon from '@mui/icons-material/DarkModeOutlined';
 import GroupIcon from '@mui/icons-material/Group';
 import HistoryIcon from '@mui/icons-material/History';
+import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import LightModeOutlinedIcon from '@mui/icons-material/LightModeOutlined';
 import LogoutIcon from '@mui/icons-material/Logout';
 import MenuIcon from '@mui/icons-material/Menu';
@@ -51,6 +52,7 @@ const navigationGroups = [
     label: 'Operacao',
     items: [
       { label: 'Clientes', to: '/clientes', icon: <PeopleAltIcon /> },
+      { label: 'Inteligência operacional', to: '/inteligencia', icon: <InsightsOutlinedIcon /> },
       { label: 'Revalidação', to: '/revalidacao', icon: <HistoryIcon /> },
       { label: 'Importar base', to: '/upload', icon: <UploadFileIcon /> },
       { label: 'Criar rota', to: '/criar-rota', icon: <AddRoadIcon /> },

@@ -1,13 +1,16 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import AssignmentLateOutlinedIcon from '@mui/icons-material/AssignmentLateOutlined';
 import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
 import GpsFixedOutlinedIcon from '@mui/icons-material/GpsFixedOutlined';
 import RouteOutlinedIcon from '@mui/icons-material/RouteOutlined';
 import ScheduleOutlinedIcon from '@mui/icons-material/ScheduleOutlined';
+import SyncOutlinedIcon from '@mui/icons-material/SyncOutlined';
 import TimerOutlinedIcon from '@mui/icons-material/TimerOutlined';
 import TrendingUpOutlinedIcon from '@mui/icons-material/TrendingUpOutlined';
 import {
+  Alert,
   Box,
+  Button,
   Chip,
   Grid,
   Paper,
@@ -45,9 +48,38 @@ import {
   followUpStatusLabel,
   isFollowUpOverdue,
 } from '../utils/followUpTasks';
+import { createOdooTestActivity, processSingleOdooFeedback, verifyOdooConnection } from '../services/odooImport';
+
+function describeOdooFeedbackSyncFailure(result) {
+  switch (result?.status) {
+    case 'skipped':
+      return 'O feedback mudou de estado antes do envio. Atualize a pagina e tente novamente.';
+    case 'not_found':
+      return 'O feedback nao foi encontrado no Firebase. Atualize a pagina antes de tentar novamente.';
+    case 'not_configured':
+      return 'A integracao com o Odoo ainda nao esta configurada no servidor.';
+    case 'blocked':
+      return 'Este feedback esta bloqueado para envio. Verifique se o cliente possui um ID Odoo valido.';
+    case 'finalization_pending':
+      return 'A atividade foi criada no Odoo, mas a confirmacao no Firebase ainda esta pendente. Atualize a pagina antes de repetir o envio.';
+    case 'failed':
+      return 'O Odoo nao aceitou este feedback agora. Aguarde alguns instantes e tente novamente.';
+    default:
+      return 'Nao foi possivel confirmar o envio deste feedback ao Odoo agora.';
+  }
+}
 
 export function OperationalIntelligence({ embedded = false }) {
   const { visitEvents, routes, routeStops } = useData();
+  const [isCheckingOdoo, setIsCheckingOdoo] = useState(false);
+  const [isCreatingOdooTest, setIsCreatingOdooTest] = useState(false);
+  const [odooConnection, setOdooConnection] = useState(null);
+  const [odooConnectionError, setOdooConnectionError] = useState('');
+  const [odooTestActivity, setOdooTestActivity] = useState(null);
+  const [odooTestActivityError, setOdooTestActivityError] = useState('');
+  const [syncingOdooEventId, setSyncingOdooEventId] = useState('');
+  const [odooEventSync, setOdooEventSync] = useState(null);
+  const [odooEventSyncError, setOdooEventSyncError] = useState('');
   const events = useMemo(() => flattenVisitEvents(visitEvents), [visitEvents]);
   const feedbacks = useMemo(() => feedbackEvents(events), [events]);
   const routeMetrics = useMemo(
@@ -66,6 +98,7 @@ export function OperationalIntelligence({ embedded = false }) {
     return assessment.color === 'warning' || assessment.color === 'error';
   });
   const odooQueue = feedbacks.filter((event) => event.odooSyncStatus === 'pending');
+  const testableOdooEvents = odooQueue.filter((event) => Number.isSafeInteger(Number(event.odooLeadId)) && Number(event.odooLeadId) > 0);
   const monitoredRoutes = routeMetrics.filter((route) => route.hasTelemetry);
   const telemetryTotals = monitoredRoutes.reduce((total, route) => ({
     plannedDistanceMeters: total.plannedDistanceMeters + (route.plannedDistanceMeters || 0),
@@ -86,6 +119,55 @@ export function OperationalIntelligence({ embedded = false }) {
   const averageVisitDuration = telemetryTotals.visitDurationCount
     ? telemetryTotals.totalVisitDurationSeconds / telemetryTotals.visitDurationCount
     : null;
+
+  async function handleOdooConnectionCheck() {
+    setIsCheckingOdoo(true);
+    setOdooConnectionError('');
+    setOdooTestActivity(null);
+    setOdooTestActivityError('');
+    try {
+      setOdooConnection(await verifyOdooConnection());
+    } catch (error) {
+      setOdooConnection(null);
+      setOdooConnectionError(error?.message || 'Nao foi possivel validar a conexao com o Odoo agora.');
+    } finally {
+      setIsCheckingOdoo(false);
+    }
+  }
+
+  async function handleCreateOdooTestActivity() {
+    setIsCreatingOdooTest(true);
+    setOdooTestActivityError('');
+    try {
+      setOdooTestActivity(await createOdooTestActivity());
+    } catch (error) {
+      setOdooTestActivity(null);
+      setOdooTestActivityError(error?.message || 'Nao foi possivel criar a atividade de teste no Odoo agora.');
+    } finally {
+      setIsCreatingOdooTest(false);
+    }
+  }
+
+  async function handleProcessSingleOdooFeedback(event) {
+    setSyncingOdooEventId(event.id);
+    setOdooEventSync(null);
+    setOdooEventSyncError('');
+    try {
+      const result = await processSingleOdooFeedback({
+        routeId: event.routeId,
+        stopId: event.stopId,
+        eventId: event.id,
+      });
+      if (!['synced', 'already_synced'].includes(result.status)) {
+        throw new Error(describeOdooFeedbackSyncFailure(result));
+      }
+      setOdooEventSync({ ...result, customerName: event.customerName || event.customerId || 'Cliente' });
+    } catch (error) {
+      setOdooEventSyncError(error?.message || 'Nao foi possivel enviar este feedback de teste ao Odoo agora.');
+    } finally {
+      setSyncingOdooEventId('');
+    }
+  }
 
   return (
     <>
@@ -316,13 +398,143 @@ export function OperationalIntelligence({ embedded = false }) {
       <Paper sx={{ p: 2.5, mt: 2 }}>
         <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" spacing={1.5} alignItems={{ md: 'center' }}>
           <Box>
-            <Typography variant="h6">Preparacao para Odoo</Typography>
+            <Typography variant="h6">Integracao com Odoo</Typography>
             <Typography variant="body2" color="text.secondary">
-              Feedbacks entram em uma fila segura. A integracao futura criara atividades no Odoo por backend, sem expor credenciais no app.
+              Feedbacks elegiveis do aplicativo entram automaticamente como atividades na oportunidade. A validacao abaixo apenas confere o acesso.
             </Typography>
           </Box>
-          <Chip label={`${odooQueue.length} feedbacks aguardando integracao`} color="info" variant="outlined" />
+          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+            <Chip label={`${odooQueue.length} feedbacks aguardando integracao`} color="info" variant="outlined" />
+            <Button
+              variant="outlined"
+              startIcon={<SyncOutlinedIcon />}
+              onClick={handleOdooConnectionCheck}
+              disabled={isCheckingOdoo}
+            >
+              {isCheckingOdoo ? 'Validando Odoo...' : 'Validar conexao Odoo'}
+            </Button>
+            {odooConnection?.available && (
+              <Button
+                variant="contained"
+                color="primary"
+                onClick={handleCreateOdooTestActivity}
+                disabled={isCreatingOdooTest}
+              >
+                {isCreatingOdooTest ? 'Criando teste...' : 'Criar atividade de teste'}
+              </Button>
+            )}
+          </Stack>
         </Stack>
+        {odooConnectionError && <Alert severity="error" sx={{ mt: 2 }}>{odooConnectionError}</Alert>}
+        {odooTestActivityError && <Alert severity="error" sx={{ mt: 2 }}>{odooTestActivityError}</Alert>}
+        {odooEventSyncError && <Alert severity="error" sx={{ mt: 2 }}>{odooEventSyncError}</Alert>}
+        {odooConnection && (
+          <Alert severity={odooConnection.available ? 'success' : 'warning'} sx={{ mt: 2 }}>
+            {odooConnection.available ? (
+              <Stack spacing={1}>
+                <Typography variant="body2">
+                  {odooConnection.protocol === 'jsonrpc'
+                    ? `Conexao JSON-RPC confirmada em ${odooConnection.baseUrl}. O CRM foi validado e as atividades serao agendadas diretamente na oportunidade.`
+                    : `Conexao JSON-2 confirmada em ${odooConnection.baseUrl}. Modelo ${odooConnection.crmLeadModelName} confirmado (ID ${odooConnection.crmLeadModelId}).`}
+                </Typography>
+                {odooConnection.leadId && (
+                  <Typography variant="body2" color="text.secondary">
+                    Oportunidade {odooConnection.leadId} validada para leitura{odooConnection.leadName ? `: ${odooConnection.leadName}` : '.'}
+                  </Typography>
+                )}
+                <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                  {odooConnection.activityScheduling === 'crm_lead_activity_schedule'
+                    ? <Chip size="small" label="Tipo padrao de atividade do CRM" color="success" variant="outlined" />
+                    : (odooConnection.activityTypes || []).map((activity) => (
+                      <Chip key={activity.id} size="small" label={`${activity.name} (#${activity.id})`} variant="outlined" />
+                    ))}
+                  {odooConnection.activityScheduling !== 'crm_lead_activity_schedule' && !(odooConnection.activityTypes || []).length && <Chip size="small" label="Nenhum tipo de atividade retornado" color="warning" />}
+                </Stack>
+              </Stack>
+            ) : (
+              <Stack spacing={0.9}>
+                <Typography variant="body2">
+                  A conexao Odoo ainda nao foi confirmada. {odooConnection.nextRequirement || 'Verifique a configuracao do Odoo e tente novamente.'}
+                </Typography>
+                {!!odooConnection.attempts?.length && (
+                  <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                    {odooConnection.attempts.map((attempt) => (
+                      <Chip
+                        key={`${attempt.baseUrl}-${attempt.code}`}
+                        size="small"
+                        variant="outlined"
+                        label={`${attempt.baseUrl.replace('https://', '')}: ${attempt.code}`}
+                      />
+                    ))}
+                  </Stack>
+                )}
+              </Stack>
+            )}
+          </Alert>
+        )}
+        {odooTestActivity && (
+          <Alert severity="success" sx={{ mt: 2 }}>
+            Atividade de teste confirmada no lead {odooTestActivity.leadId} (atividade #{odooTestActivity.activityId}). Repetir esta acao reutiliza o mesmo registro.
+          </Alert>
+        )}
+        {odooEventSync && (
+          <Alert severity="success" sx={{ mt: 2 }}>
+            Feedback de {odooEventSync.customerName} confirmado no Odoo{odooEventSync.odooActivityId ? ` (atividade #${odooEventSync.odooActivityId})` : ''}. Novos feedbacks elegiveis sao enviados automaticamente.
+          </Alert>
+        )}
+        {odooConnection?.available && (
+          <Box mt={2.5} pt={2.5} borderTop="1px solid" borderColor="divider">
+            <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={1} mb={1.5} alignItems={{ md: 'center' }}>
+              <Box>
+                <Typography variant="subtitle1">Reprocessar um feedback especifico</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Use esta acao somente para validar ou reenviar um item. A fila automatica processa os novos feedbacks sem intervencao manual.
+                </Typography>
+              </Box>
+              <Chip label={`${testableOdooEvents.length} feedbacks elegiveis`} color="info" variant="outlined" />
+            </Stack>
+            {testableOdooEvents.length === 0 ? (
+              <Typography variant="body2" color="text.secondary">
+                Registre um feedback no app para um cliente importado com ID tecnico Odoo e ele aparecera aqui para o teste individual.
+              </Typography>
+            ) : (
+              <TableContainer>
+                <Table size="small" aria-label="Feedbacks pendentes para teste individual no Odoo">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Cliente</TableCell>
+                      <TableCell>Vendedor</TableCell>
+                      <TableCell>Registrado em</TableCell>
+                      <TableCell>ID Odoo</TableCell>
+                      <TableCell align="right">Teste</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {testableOdooEvents.slice(0, 10).map((event) => (
+                      <TableRow key={`${event.routeId}-${event.stopId}-${event.id}`} hover>
+                        <TableCell>{event.customerName || event.customerId || '-'}</TableCell>
+                        <TableCell>{event.sellerName || event.sellerEmail || '-'}</TableCell>
+                        <TableCell>{formatDateTime(event.createdAt)}</TableCell>
+                        <TableCell>#{event.odooLeadId}</TableCell>
+                        <TableCell align="right">
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            startIcon={syncingOdooEventId === event.id ? <SyncOutlinedIcon /> : undefined}
+                            onClick={() => handleProcessSingleOdooFeedback(event)}
+                            disabled={Boolean(syncingOdooEventId)}
+                          >
+                            {syncingOdooEventId === event.id ? 'Enviando...' : 'Enviar este feedback'}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </Box>
+        )}
       </Paper>
 
       {events.length === 0 && (

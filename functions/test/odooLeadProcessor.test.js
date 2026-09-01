@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const XLSX = require('xlsx');
-const { processOdooWorkbook } = require('../src/odooLeadProcessor');
+const { buildFirebaseCustomer, mergeCustomer, processOdooWorkbook } = require('../src/odooLeadProcessor');
 
 function createWorkbook(rows) {
   const worksheet = XLSX.utils.aoa_to_sheet(rows);
@@ -97,4 +97,217 @@ test('preenche CNPJ extraido de marcador somente apos consulta confirmada', asyn
   assert.ok(result.audit.some((entry) => entry.stage === 'cnpj_lookup'
     && entry.status === 'FILLED'
     && entry.fields.includes('(CPF/CNPJ)')));
+});
+
+test('mantem separados o ID tecnico Odoo, o codigo Minum e o ID externo', async () => {
+  const source = createWorkbook([
+    [
+      'Oportunidade',
+      'ID',
+      'Codigo do sistema MINUM',
+      'External ID',
+      'Marcadores/Nome do marcador',
+    ],
+    ['Oportunidade controlada', 58680, 'CL53242', '__export__.crm_lead_58680_43866912', 'teste_odoo'],
+  ]);
+
+  const result = await processOdooWorkbook(source, {
+    enableGeocoding: false,
+    enableResearch: false,
+  });
+  const record = result.records[0];
+  const customer = buildFirebaseCustomer(record, {
+    jobId: 'job_test',
+    importedBy: 'admin_test',
+    importedAt: 1,
+  });
+
+  assert.equal(record.ID, 'CL53242');
+  assert.equal(record['Odoo Lead ID'], '58680');
+  assert.equal(record['Odoo External ID'], '__export__.crm_lead_58680_43866912');
+  assert.equal(customer.externalId, 'CL53242');
+  assert.equal(customer.minumCode, 'CL53242');
+  assert.equal(customer.odooLeadId, 58680);
+  assert.equal(customer.odooExternalId, '__export__.crm_lead_58680_43866912');
+  const auditEntry = result.audit.find((entry) => entry.stage === 'consolidation');
+  assert.equal(auditEntry.minumCode, 'CL53242');
+  assert.equal(auditEntry.odooLeadId, '58680');
+  assert.equal(auditEntry.odooExternalId, '__export__.crm_lead_58680_43866912');
+});
+
+test('aceita a exportacao direta do crm.lead e prepara o vinculo de atividades Odoo', async () => {
+  const source = createWorkbook([
+    [
+      'id',
+      'name',
+      'cpf_cnpj_number',
+      'street',
+      'email_from',
+      'state_id/name',
+      'city',
+      'phone',
+      'segment',
+      'user_id/name',
+      'distribution_company',
+      'tag_ids',
+      'expected_revenue',
+      'description',
+      'source_id',
+      'stage_id',
+      'contact_name',
+      'country_id',
+    ],
+    [
+      '__export__.crm_lead_64208_cbc1fc8c',
+      'True - ALEX DA SILVA PEREIRA',
+      '82456470125',
+      'R. Joao Leite Ribeiro, 1460',
+      'alex@minum.com.br',
+      'Mato Grosso do Sul',
+      'MS - Anastacio',
+      '67996738355',
+      'Mercados',
+      'FLAVIO DE PAULA TERRA',
+      'Energisa MS',
+      'lemit,Anastacio,cnpj12723924000103',
+      3364.45,
+      'Coordenadas: -20.4645512,-55.7881684',
+      'Datlo',
+      'Oferta Gerada',
+      'ALEX DA SILVA PEREIRA',
+      'Brasil',
+    ],
+  ]);
+
+  const result = await processOdooWorkbook(source, {
+    enableGeocoding: false,
+    enableResearch: false,
+  });
+
+  const record = result.records[0];
+  const customer = buildFirebaseCustomer(record, {
+    jobId: 'job_raw_odoo',
+    importedBy: 'admin_test',
+    importedAt: 1,
+  });
+
+  assert.equal(result.summary.inputFormat, 'odoo_raw_export');
+  assert.equal(result.summary.odooLeadsLinked, 1);
+  assert.equal(record.ID, 'odoo_lead_64208');
+  assert.equal(record['Odoo Lead ID'], '64208');
+  assert.equal(record['Odoo External ID'], '__export__.crm_lead_64208_cbc1fc8c');
+  assert.equal(record.Opportunity, 'ALEX DA SILVA PEREIRA');
+  assert.equal(record['Client - State'], 'MS');
+  assert.equal(record.Cidade, 'Anastacio');
+  assert.equal(record.__meta.coordinateSource, 'Descricao da exportacao Odoo');
+  assert.equal(customer.odooLeadId, 64208);
+  assert.equal(customer.latitude, -20.4645512);
+  assert.equal(customer.longitude, -55.7881684);
+});
+
+test('usa a oportunidade como nome principal e preserva o contato separadamente', async () => {
+  const source = createWorkbook([
+    ['id', 'name', 'street', 'state_id/name', 'city', 'tag_ids', 'contact_name'],
+    [
+      '__export__.crm_lead_64059_ad6d3e47',
+      'On Fit',
+      'Av. Teste, 100',
+      'Goias',
+      'GO - Goiania',
+      'novo',
+      'DYONATHAN PATROCINIO XAVIER',
+    ],
+  ]);
+
+  const result = await processOdooWorkbook(source, {
+    enableGeocoding: false,
+    enableResearch: false,
+  });
+  const customer = buildFirebaseCustomer(result.records[0], {
+    jobId: 'job_name_priority',
+    importedBy: 'admin_test',
+    importedAt: 1,
+  });
+
+  assert.equal(result.records[0].Opportunity, 'On Fit');
+  assert.equal(result.records[0]['Client - Name'], 'DYONATHAN PATROCINIO XAVIER');
+  assert.equal(customer.name, 'On Fit');
+  assert.equal(customer.opportunity, 'On Fit');
+  assert.equal(customer.clientName, 'DYONATHAN PATROCINIO XAVIER');
+});
+
+test('preserva coordenada manual aprovada e nao consulta Mapbox novamente para o mesmo endereco', async () => {
+  const source = createWorkbook([
+    ['Oportunidade', 'Codigo do sistema MINUM', 'Endereco', 'Estado/Codigo do estado', 'Cidade', 'Marcadores/Nome do marcador'],
+    ['Cliente revisado', 'CL55999', 'Rua da Revisao, 10', 'MS', 'Campo Grande', 'teste'],
+  ]);
+  let mapboxCalls = 0;
+
+  const result = await processOdooWorkbook(source, {
+    customers: {
+      cliente_revisado: {
+        id: 'cliente_revisado',
+        minumCode: 'CL55999',
+        address: 'Rua da Revisao, 10',
+        city: 'Campo Grande',
+        state: 'MS',
+        latitude: -20.45001,
+        longitude: -54.61001,
+        navigationLatitude: -20.45002,
+        navigationLongitude: -54.61002,
+        coordinateStatus: 'manual_confirmed',
+        coordinatePrecisionLevel: 'manual',
+        coordinateSource: 'Correcao manual administrativa',
+        geocodingReview: { status: 'manual', reason: 'Confirmada no mapa.' },
+      },
+    },
+    enableResearch: false,
+    mapboxGeocoderClient: {
+      forwardGeocode: async () => {
+        mapboxCalls += 1;
+        throw new Error('Mapbox nao deveria ser chamado');
+      },
+    },
+  });
+
+  assert.equal(mapboxCalls, 0);
+  assert.equal(result.records[0].latitude, -20.45001);
+  assert.equal(result.records[0].longitude, -54.61001);
+  assert.equal(result.records[0].__meta.coordinateStatus, 'manual_confirmed');
+  assert.ok(result.audit.some((entry) => entry.stage === 'coordinate_reuse'));
+});
+
+test('merge conserva uma coordenada aprovada quando o endereco nao mudou', () => {
+  const existing = {
+    opportunity: 'Cliente revisado',
+    latitude: -20.45,
+    longitude: -54.61,
+    navigationLatitude: -20.4501,
+    navigationLongitude: -54.6101,
+    coordinateStatus: 'manual_confirmed',
+    coordinateSource: 'Correcao manual administrativa',
+    coordinatePrecisionLevel: 'manual',
+    canonicalKey: 'rua_da_revisao|10|campo_grande|MS',
+    geocodingReview: { status: 'manual', addressCanonicalKey: 'rua_da_revisao|10|campo_grande|MS' },
+  };
+  const incoming = {
+    opportunity: 'Cliente revisado atualizado',
+    latitude: -20.99,
+    longitude: -54.99,
+    navigationLatitude: -20.99,
+    navigationLongitude: -54.99,
+    coordinateStatus: 'needs_review',
+    coordinateSource: 'Mapbox',
+    canonicalKey: 'rua_da_revisao|10|campo_grande|MS',
+    importMetadata: { coordinateStatus: 'needs_review' },
+    raw: {},
+  };
+
+  const merged = mergeCustomer(existing, incoming);
+  assert.equal(merged.opportunity, 'Cliente revisado atualizado');
+  assert.equal(merged.latitude, -20.45);
+  assert.equal(merged.longitude, -54.61);
+  assert.equal(merged.coordinateStatus, 'manual_confirmed');
+  assert.equal(merged.geocodingReview.status, 'manual');
+  assert.equal(merged.importMetadata.coordinateReviewPreserved, true);
 });

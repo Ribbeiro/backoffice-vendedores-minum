@@ -34,13 +34,16 @@ import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import CalculateIcon from '@mui/icons-material/Calculate';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import MyLocationIcon from '@mui/icons-material/MyLocation';
 import PageHeader from '../components/PageHeader';
 import RoutePreviewMap from '../components/RoutePreviewMap';
 import { createSharedRouteAssignment, getSharedRoutePreview, optimizeSharedRoute } from '../services/api';
 import { useData } from '../hooks/useData';
+import { currencyBRL } from '../utils/formatters';
 import { distanceBetweenCustomersMeters } from '../utils/locationDistance';
 import { getSellerDisplayName, isCustomerAssignedToSeller } from '../utils/sellerCustomerAssignment';
+import { customerPrimaryName, customerSearchText } from '../utils/customerDisplay';
 
 const initialForm = {
   sellerId: '',
@@ -51,7 +54,7 @@ const initialForm = {
 };
 
 export default function CriarRota() {
-  const { customers, sellers, routes } = useData();
+  const { customers, sellers } = useData();
   const [form, setForm] = useState(initialForm);
   const [search, setSearch] = useState('');
   const [selectedIds, setSelectedIds] = useState([]);
@@ -64,6 +67,8 @@ export default function CriarRota() {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [draggedCustomerId, setDraggedCustomerId] = useState(null);
+  const [dropTargetCustomerId, setDropTargetCustomerId] = useState(null);
 
   const selectedSeller = sellers.find((seller) => seller.id === form.sellerId);
   const selectedSellerName = getSellerDisplayName(selectedSeller);
@@ -83,9 +88,7 @@ export default function CriarRota() {
   const availableCustomers = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
     return customersInRadius.map((customer) => {
-      const searchable = [customer.name, customer.clientName, customer.opportunity, customer.city, customer.cnpjCpf]
-        .join(' ')
-        .toLowerCase();
+      const searchable = customerSearchText(customer);
       return {
         customer,
         distanceMeters: anchorCustomer ? distanceBetweenCustomersMeters(customer, anchorCustomer) : null,
@@ -98,11 +101,6 @@ export default function CriarRota() {
       })
       .slice(0, 150);
   }, [anchorCustomer, customersInRadius, search]);
-  const recentAssignments = useMemo(
-    () => routes.filter((route) => route.assignmentType === 'shared' || route.source === 'admin_assignment').slice(0, 5),
-    [routes],
-  );
-
   function setField(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
   }
@@ -161,6 +159,45 @@ export default function CriarRota() {
       return next;
     });
     clearRoutePreview();
+  }
+
+  function reorderCustomer(draggedId, targetId) {
+    if (!draggedId || !targetId || draggedId === targetId) return;
+    if (draggedId === anchorCustomerId || targetId === anchorCustomerId) return;
+
+    setSelectedIds((current) => {
+      const fromIndex = current.indexOf(draggedId);
+      const targetIndex = current.indexOf(targetId);
+      if (fromIndex < 0 || targetIndex < 0) return current;
+
+      const next = [...current];
+      next.splice(fromIndex, 1);
+      next.splice(targetIndex, 0, draggedId);
+      return next;
+    });
+    clearRoutePreview();
+  }
+
+  function handleDragStart(event, customerId) {
+    if (customerId === anchorCustomerId) return;
+    setDraggedCustomerId(customerId);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', customerId);
+  }
+
+  function handleDragOver(event, targetId) {
+    if (!draggedCustomerId || targetId === anchorCustomerId || draggedCustomerId === targetId) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    setDropTargetCustomerId(targetId);
+  }
+
+  function handleDrop(event, targetId) {
+    event.preventDefault();
+    const customerId = draggedCustomerId || event.dataTransfer.getData('text/plain');
+    reorderCustomer(customerId, targetId);
+    setDraggedCustomerId(null);
+    setDropTargetCustomerId(null);
   }
 
   function clearRoutePreview() {
@@ -330,92 +367,137 @@ export default function CriarRota() {
           </Paper>
         </Grid>
 
-        <Grid item xs={12} lg={4}>
-          <Paper sx={{ overflow: 'hidden' }}>
-            <Box p={2.5} borderBottom="1px solid" borderColor="divider">
-              <Typography variant="h6">Selecionar clientes</Typography>
-              <TextField label="Buscar cliente" value={search} onChange={(event) => setSearch(event.target.value)} fullWidth size="small" sx={{ mt: 1.5 }} />
-              <Typography variant="caption" color="text.secondary" display="block" mt={1}>
-                {!selectedSeller
-                  ? 'Escolha um vendedor para mostrar somente os clientes atribuidos a ele.'
-                  : anchorCustomer
-                    ? 'Clientes atribuidos a ' + selectedSellerName + ' em um raio de ' + radiusKm + ' km do prospecto principal.'
-                    : 'Mostrando clientes atribuidos a ' + selectedSellerName + '. Escolha o prospecto principal para aplicar o raio.'}
-              </Typography>
-            </Box>
-            <TableContainer sx={{ maxHeight: 610 }}>
-              <Table stickyHeader size="small">
-                <TableHead><TableRow><TableCell padding="checkbox" /><TableCell>Cliente</TableCell><TableCell>Cidade</TableCell><TableCell align="right">Distancia</TableCell></TableRow></TableHead>
-                <TableBody>
-                  {availableCustomers.map(({ customer, distanceMeters }) => {
-                    const id = customerKey(customer);
-                    const isAnchor = id === anchorCustomerId;
-                    return (
-                      <TableRow key={id} hover onClick={() => toggleCustomer(customer)} sx={{ cursor: isAnchor ? 'default' : 'pointer', bgcolor: isAnchor ? 'action.selected' : 'inherit' }}>
-                        <TableCell padding="checkbox"><Checkbox checked={selectedIds.includes(id)} disabled={isAnchor} /></TableCell>
-                        <TableCell><Typography variant="body2" fontWeight={700}>{customer.name || customer.clientName || customer.opportunity}</Typography><Typography variant="caption" color="text.secondary">{customer.cnpjCpf || customer.id}</Typography></TableCell>
-                        <TableCell>{customer.city || '-'}</TableCell>
-                        <TableCell align="right">
-                          {isAnchor ? <Chip size="small" color="primary" label="Principal" /> : anchorCustomer ? formatDistance(distanceMeters) : '-'}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                  {!selectedSeller && <TableRow><TableCell colSpan={4} align="center">Selecione um vendedor primeiro.</TableCell></TableRow>}
-                  {selectedSeller && availableCustomers.length === 0 && <TableRow><TableCell colSpan={4} align="center">Nenhum cliente encontrado neste raio.</TableCell></TableRow>}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          </Paper>
-        </Grid>
-
-        <Grid item xs={12} lg={4}>
-          <Paper sx={{ overflow: 'hidden' }}>
-            <Box p={2.5} borderBottom="1px solid" borderColor="divider">
-              <Typography variant="h6">Ordem da rota</Typography>
-              <Typography variant="body2" color="text.secondary">{selectedCustomers.length} clientes selecionados</Typography>
-            </Box>
-            <TableContainer sx={{ maxHeight: 610 }}>
-              <Table stickyHeader size="small">
-                <TableHead><TableRow><TableCell>Ordem</TableCell><TableCell>Cliente</TableCell><TableCell align="right">Ajustar</TableCell></TableRow></TableHead>
-                <TableBody>
-                  {selectedCustomers.map((customer, index) => {
-                    const previousLeg = index > 0 ? preview?.legs?.[index - 1] : null;
-                    const isAnchor = customerKey(customer) === anchorCustomerId;
-                    return (
-                    <TableRow key={customerKey(customer)}>
-                      <TableCell>{index + 1}</TableCell>
-                      <TableCell>
-                        <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
-                          <Typography variant="body2" fontWeight={700}>{customer.name || customer.clientName || customer.opportunity}</Typography>
-                          {isAnchor && <Chip size="small" color="primary" label="Principal" />}
-                        </Stack>
-                        <Typography variant="caption" color="text.secondary" display="block">{customer.city || customer.state || '-'}</Typography>
-                        <Typography variant="caption" color={previousLeg ? 'primary.main' : 'text.secondary'} display="block">
-                          {isAnchor ? `Inicio da rota e centro do raio de ${radiusKm} km` : previousLeg ? `${formatDistance(previousLeg.distanceMeters)} - ${formatDuration(previousLeg.durationSeconds)} desde a parada anterior` : 'Atualize o mapa para calcular este trecho'}
-                        </Typography>
-                      </TableCell>
-                      <TableCell align="right">
-                        <Tooltip title={isAnchor ? 'O prospecto principal permanece como primeira parada' : 'Mover para cima'}><span><IconButton size="small" onClick={() => moveCustomer(index, -1)} disabled={index === 0 || isAnchor || (anchorCustomerId && index === 1)}><ArrowUpwardIcon fontSize="small" /></IconButton></span></Tooltip>
-                        <Tooltip title={isAnchor ? 'O prospecto principal permanece como primeira parada' : 'Mover para baixo'}><span><IconButton size="small" onClick={() => moveCustomer(index, 1)} disabled={index === selectedCustomers.length - 1 || isAnchor}><ArrowDownwardIcon fontSize="small" /></IconButton></span></Tooltip>
-                        <Tooltip title={isAnchor ? 'O prospecto principal permanece na rota' : 'Remover'}><span><IconButton size="small" onClick={() => toggleCustomer(customer)} disabled={isAnchor}><DeleteOutlineIcon fontSize="small" /></IconButton></span></Tooltip>
-                      </TableCell>
+        <Grid item xs={12} lg={8}>
+          <Stack spacing={2.5}>
+            <Paper sx={{ overflow: 'hidden' }}>
+              <Box p={2.5} borderBottom="1px solid" borderColor="divider">
+                <Stack direction={{ xs: 'column', sm: 'row' }} gap={1.5} justifyContent="space-between" alignItems={{ sm: 'flex-start' }}>
+                  <Box>
+                    <Typography variant="h6">Selecionar clientes</Typography>
+                    <Typography variant="body2" color="text.secondary" mt={0.5}>
+                      {!selectedSeller
+                        ? 'Escolha um vendedor para mostrar somente os clientes atribuidos a ele.'
+                        : anchorCustomer
+                          ? `Clientes atribuidos a ${selectedSellerName} em um raio de ${radiusKm} km do prospecto principal.`
+                          : `Mostrando clientes atribuidos a ${selectedSellerName}. Escolha o prospecto principal para aplicar o raio.`}
+                    </Typography>
+                  </Box>
+                  <Chip color="primary" variant="outlined" label={`${selectedCustomers.length} ${selectedCustomers.length === 1 ? 'cliente selecionado' : 'clientes selecionados'}`} />
+                </Stack>
+                <TextField label="Buscar cliente" value={search} onChange={(event) => setSearch(event.target.value)} fullWidth size="small" sx={{ mt: 2 }} />
+              </Box>
+              <TableContainer sx={{ maxHeight: { xs: 420, lg: 545 } }}>
+                <Table stickyHeader size="small" sx={{ minWidth: 800 }} aria-label="Clientes disponiveis para a rota">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell padding="checkbox" />
+                      <TableCell sx={{ minWidth: 205 }}>Cliente</TableCell>
+                      <TableCell sx={{ minWidth: 105 }}>Cidade</TableCell>
+                      <TableCell align="right" sx={{ minWidth: 130 }}>Receita esperada</TableCell>
+                      <TableCell sx={{ minWidth: 135 }}>Estagio</TableCell>
+                      <TableCell align="right" sx={{ minWidth: 100 }}>Distancia</TableCell>
                     </TableRow>
-                    );
-                  })}
-                  {selectedCustomers.length === 0 && <TableRow><TableCell colSpan={3} align="center">Selecione clientes ao lado.</TableCell></TableRow>}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          </Paper>
+                  </TableHead>
+                  <TableBody>
+                    {availableCustomers.map(({ customer, distanceMeters }) => {
+                      const id = customerKey(customer);
+                      const isAnchor = id === anchorCustomerId;
+                      return (
+                        <TableRow key={id} hover onClick={() => toggleCustomer(customer)} sx={{ cursor: isAnchor ? 'default' : 'pointer', bgcolor: isAnchor ? 'action.selected' : 'inherit' }}>
+                          <TableCell padding="checkbox"><Checkbox checked={selectedIds.includes(id)} disabled={isAnchor} /></TableCell>
+                          <TableCell>
+                            <Typography variant="body2" fontWeight={700}>{displayCustomerName(customer)}</Typography>
+                            <Typography variant="caption" color="text.secondary">{customer.cnpjCpf || customer.id}</Typography>
+                          </TableCell>
+                          <TableCell>{customer.city || '-'}</TableCell>
+                          <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>{formatExpectedRevenue(customer)}</TableCell>
+                          <TableCell>
+                            {customer.pipelineStage || customer.status
+                              ? <Chip size="small" variant="outlined" label={customer.pipelineStage || customer.status} />
+                              : <Typography variant="body2" color="text.secondary">-</Typography>}
+                          </TableCell>
+                          <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                            {isAnchor ? <Chip size="small" color="primary" label="Principal" /> : anchorCustomer ? formatDistance(distanceMeters) : '-'}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                    {!selectedSeller && <TableRow><TableCell colSpan={6} align="center">Selecione um vendedor primeiro.</TableCell></TableRow>}
+                    {selectedSeller && availableCustomers.length === 0 && <TableRow><TableCell colSpan={6} align="center">Nenhum cliente encontrado neste raio.</TableCell></TableRow>}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </Paper>
 
-          <Paper sx={{ mt: 2.5, p: 2.5 }}>
-            <Typography variant="subtitle1" fontWeight={700}>Ultimas rotas atribuidas</Typography>
-            <Stack spacing={1} mt={1.5}>
-              {recentAssignments.map((route) => <Typography key={route.id} variant="body2">{route.name} - {route.sellerName || route.sellerUid} - {route.status}</Typography>)}
-              {recentAssignments.length === 0 && <Typography variant="body2" color="text.secondary">Nenhuma rota atribuida ainda.</Typography>}
-            </Stack>
-          </Paper>
+            <Paper sx={{ overflow: 'hidden' }}>
+              <Box p={2.5} borderBottom="1px solid" borderColor="divider">
+                <Typography variant="h6">Ordem da rota</Typography>
+                <Typography variant="body2" color="text.secondary">Arraste as paradas pelo icone de pontos para reorganizar. Os botoes continuam disponiveis para ajuste fino.</Typography>
+              </Box>
+              <TableContainer sx={{ maxHeight: 330 }}>
+                <Table stickyHeader size="small" aria-label="Ordem das paradas da rota">
+                  <TableHead><TableRow><TableCell padding="checkbox" aria-label="Arrastar" /><TableCell>Ordem</TableCell><TableCell>Cliente</TableCell><TableCell align="right">Ajustar</TableCell></TableRow></TableHead>
+                  <TableBody>
+                    {selectedCustomers.map((customer, index) => {
+                      const previousLeg = index > 0 ? preview?.legs?.[index - 1] : null;
+                      const isAnchor = customerKey(customer) === anchorCustomerId;
+                      const id = customerKey(customer);
+                      const isDragging = draggedCustomerId === id;
+                      const isDropTarget = dropTargetCustomerId === id;
+                      return (
+                        <TableRow
+                          key={id}
+                          draggable={!isAnchor}
+                          onDragStart={(event) => handleDragStart(event, id)}
+                          onDragOver={(event) => handleDragOver(event, id)}
+                          onDrop={(event) => handleDrop(event, id)}
+                          onDragEnd={() => {
+                            setDraggedCustomerId(null);
+                            setDropTargetCustomerId(null);
+                          }}
+                          sx={{
+                            cursor: isAnchor ? 'default' : 'grab',
+                            opacity: isDragging ? 0.55 : 1,
+                            '& > *': {
+                              borderTop: isDropTarget ? '2px solid' : undefined,
+                              borderColor: isDropTarget ? 'primary.main' : undefined,
+                            },
+                          }}
+                        >
+                          <TableCell padding="checkbox">
+                            <Tooltip title={isAnchor ? 'O prospecto principal permanece no inicio da rota' : 'Arraste para mudar a ordem'}>
+                              <span>
+                                <IconButton size="small" disabled={isAnchor} aria-label={`Arrastar ${displayCustomerName(customer)}`}>
+                                  <DragIndicatorIcon fontSize="small" />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          </TableCell>
+                          <TableCell>{index + 1}</TableCell>
+                          <TableCell>
+                            <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
+                              <Typography variant="body2" fontWeight={700}>{displayCustomerName(customer)}</Typography>
+                              {isAnchor && <Chip size="small" color="primary" label="Principal" />}
+                            </Stack>
+                            <Typography variant="caption" color="text.secondary" display="block">{customer.city || customer.state || '-'}</Typography>
+                            <Typography variant="caption" color={previousLeg ? 'primary.main' : 'text.secondary'} display="block">
+                              {isAnchor ? `Inicio da rota e centro do raio de ${radiusKm} km` : previousLeg ? `${formatDistance(previousLeg.distanceMeters)} - ${formatDuration(previousLeg.durationSeconds)} desde a parada anterior` : 'Atualize o mapa para calcular este trecho'}
+                            </Typography>
+                          </TableCell>
+                          <TableCell align="right">
+                            <Tooltip title={isAnchor ? 'O prospecto principal permanece como primeira parada' : 'Mover para cima'}><span><IconButton size="small" onClick={() => moveCustomer(index, -1)} disabled={index === 0 || isAnchor || (anchorCustomerId && index === 1)}><ArrowUpwardIcon fontSize="small" /></IconButton></span></Tooltip>
+                            <Tooltip title={isAnchor ? 'O prospecto principal permanece como primeira parada' : 'Mover para baixo'}><span><IconButton size="small" onClick={() => moveCustomer(index, 1)} disabled={index === selectedCustomers.length - 1 || isAnchor}><ArrowDownwardIcon fontSize="small" /></IconButton></span></Tooltip>
+                            <Tooltip title={isAnchor ? 'O prospecto principal permanece na rota' : 'Remover'}><span><IconButton size="small" onClick={() => toggleCustomer(customer)} disabled={isAnchor}><DeleteOutlineIcon fontSize="small" /></IconButton></span></Tooltip>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                    {selectedCustomers.length === 0 && <TableRow><TableCell colSpan={4} align="center">Selecione clientes acima.</TableCell></TableRow>}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </Paper>
+          </Stack>
         </Grid>
 
         <Grid item xs={12}>
@@ -451,7 +533,21 @@ function isWithinRadius(customer, anchorCustomer, radiusKm) {
 }
 
 function displayCustomerName(customer) {
-  return customer?.name || customer?.clientName || customer?.opportunity || customer?.externalId || customer?.id || 'Cliente sem nome';
+  return customerPrimaryName(customer);
+}
+
+function formatExpectedRevenue(customer) {
+  const numericValue = customer?.expectedRevenueValue;
+  if (numericValue !== null && numericValue !== undefined && numericValue !== '') {
+    const parsedValue = Number(numericValue);
+    if (Number.isFinite(parsedValue)) return currencyBRL(parsedValue);
+  }
+
+  const rawValue = String(customer?.expectedRevenue || '').trim();
+  if (!rawValue) return '-';
+
+  const parsedValue = Number(rawValue);
+  return Number.isFinite(parsedValue) ? currencyBRL(parsedValue) : rawValue;
 }
 
 function formatDistance(meters) {

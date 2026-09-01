@@ -164,7 +164,7 @@ function buildStopRow(stop, route, customersByKey) {
     routeStatus: route.status,
     routeType: route.type,
     order: Number(stop.order ?? stop.ordem ?? 0) || null,
-    customerName: stop.customerName || stop.clienteNome || stop.name || customer?.name || customer?.clientName || '-',
+    customerName: stop.opportunity || customer?.opportunity || stop.customerName || stop.clienteNome || stop.name || customer?.name || customer?.clientName || '-',
     customerExternalId: stop.customerExternalId || stop.customerId || customer?.externalId || customer?.id || '',
     customerCnpjCpf: stop.cnpjCpf || stop.cpfCnpj || customer?.cnpjCpf || customer?.cpfCnpj || '',
     city: stop.city || customer?.city || '',

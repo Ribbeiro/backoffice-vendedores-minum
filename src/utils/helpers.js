@@ -4,6 +4,8 @@ export const excelHeaders = [
   'Opportunity',
   '(CPF/CNPJ)',
   'ID',
+  'Odoo Lead ID',
+  'Odoo External ID',
   'Deal - Address',
   'Client - Email',
   'Client - State',
@@ -33,8 +35,13 @@ export function asArray(value) {
 
 export function normalizeCustomer(row, index) {
   const coordinates = parseCoordinates(readCell(row, 'Coordenadas', 'Coordinates'));
-  const rawId = readCell(row, 'ID', 'id', 'Id', 'CNPJ', 'CPF/CNPJ', '(CPF/CNPJ)');
-  const id = String(rawId || `linha-${index + 1}`).trim();
+  // ID continua sendo o codigo Minum por compatibilidade com importacoes e
+  // chaves existentes. O ID tecnico do Odoo tem leitura propria.
+  const rawMinumCode = readCell(row, 'Codigo do sistema MINUM', 'Código do sistema MINUM', 'minumCode', 'externalId', 'ID', 'id', 'Id');
+  const minumCode = String(rawMinumCode || `linha-${index + 1}`).trim();
+  const id = minumCode;
+  const odooLeadId = positiveIntegerOrNull(readCell(row, 'Odoo Lead ID', 'odooLeadId', 'CRM Lead ID', 'crmLeadId'));
+  const odooExternalId = clean(readCell(row, 'Odoo External ID', 'odooExternalId', 'External ID', 'ID externo do Odoo'));
   const address = clean(readCell(row, 'Deal - Address', 'Endereco sugerido', 'Endereço sugerido', 'Endereco cadastral', 'Endereço cadastral'));
   const cnpjCpf = clean(readCell(row, '(CPF/CNPJ)', 'CPF/CNPJ', 'CNPJ', 'CPF'));
   const clientName = clean(readCell(row, 'Client - Name', 'Razao social', 'Razão social', 'Nome Fantasia'));
@@ -52,6 +59,9 @@ export function normalizeCustomer(row, index) {
     cpfCnpj: cnpjCpf,
     cnpjCpf,
     externalId: id,
+    minumCode,
+    odooLeadId,
+    odooExternalId,
     dealAddress: address,
     address,
     email: clean(readCell(row, 'Client - Email', 'E-mail de cadastro', 'E-mail da contabilidade')),
@@ -74,7 +84,9 @@ export function normalizeCustomer(row, index) {
     origem: clean(readCell(row, 'Deal - Origem', 'Origem')),
     pipelineStage,
     status: pipelineStage,
-    name: clientName || opportunity || id,
+    // A oportunidade e o nome que identifica o prospecto no funil. O nome
+    // do contato fica em clientName para nao trocar empresa e responsavel.
+    name: opportunity || clientName || id,
     clientName,
     latitude: latitude ?? 0,
     longitude: longitude ?? 0,
@@ -165,6 +177,13 @@ function numberOrNull(value) {
       : normalized,
   );
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function positiveIntegerOrNull(value) {
+  const normalized = clean(value).replace(/\.0+$/, '');
+  if (!/^\d+$/.test(normalized)) return null;
+  const parsed = Number(normalized);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function parseCoordinates(value) {

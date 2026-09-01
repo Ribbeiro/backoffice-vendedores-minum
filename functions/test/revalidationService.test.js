@@ -4,6 +4,8 @@ const {
   auditExistingCustomers,
   calculateCheckinGroundTruth,
   detectDuplicateCoordinates,
+  selectCustomerIdsForAudit,
+  summarizeAudit,
 } = require('../src/revalidationService');
 
 function mapboxResult(latitude, longitude, street, number, place = 'Campo Grande', region = 'MS') {
@@ -69,4 +71,67 @@ test('auditoria marca proposta validada como elegivel sem gravar customers', asy
   assert.equal(results[0].candidateVerified, true);
   assert.equal(results[0].approvalEligible, true);
   assert.equal(results[0].geocodedCoordinate.latitude, -20.4001);
+});
+
+test('coordenada manual aprovada nao consulta Mapbox nem volta como needs review', async () => {
+  let mapboxCalls = 0;
+  const customers = {
+    manual: {
+      name: 'Cliente manual',
+      address: 'Rua Manual, 12',
+      city: 'Campo Grande',
+      state: 'MS',
+      latitude: -20.45,
+      longitude: -54.61,
+      coordinateStatus: 'manual_confirmed',
+      coordinateSource: 'Correcao manual administrativa',
+      geocodingReview: { status: 'manual' },
+    },
+  };
+  const results = await auditExistingCustomers({
+    customers,
+    mapboxGeocoderClient: {
+      forwardGeocodeBatch: async () => {
+        mapboxCalls += 1;
+        return [];
+      },
+    },
+  });
+
+  assert.equal(mapboxCalls, 0);
+  assert.equal(results[0].reviewLocked, true);
+  assert.equal(results[0].coordinateStatus, 'manual_confirmed');
+  assert.equal(summarizeAudit(results).needsReview, 0);
+  assert.deepEqual(selectCustomerIdsForAudit(customers), []);
+  assert.deepEqual(selectCustomerIdsForAudit(customers, { includeReviewed: true }), ['manual']);
+
+  await auditExistingCustomers({
+    customers,
+    includeReviewed: true,
+    mapboxGeocoderClient: {
+      forwardGeocodeBatch: async () => {
+        mapboxCalls += 1;
+        return [mapboxResult(-20.45, -54.61, 'Rua Manual', '12')];
+      },
+      reverseGeocode: async () => ({ street: 'Rua Manual', houseNumber: '12', place: 'Campo Grande', region: 'MS', postcode: '' }),
+    },
+  });
+  assert.equal(mapboxCalls, 1);
+});
+
+test('endereco alterado volta para a fila mesmo quando a coordenada anterior foi aprovada', () => {
+  const customers = {
+    changed: {
+      address: 'Rua Nova, 99',
+      city: 'Campo Grande',
+      state: 'MS',
+      latitude: -20.45,
+      longitude: -54.61,
+      coordinateStatus: 'manual_confirmed',
+      canonicalKey: 'endereco_antigo|1|campo_grande|MS',
+      geocodingReview: { status: 'manual', addressCanonicalKey: 'endereco_antigo|1|campo_grande|MS' },
+    },
+  };
+
+  assert.deepEqual(selectCustomerIdsForAudit(customers), ['changed']);
 });

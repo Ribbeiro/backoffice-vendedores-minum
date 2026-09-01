@@ -7,13 +7,15 @@ import {
   DialogContent,
   DialogTitle,
 } from '@mui/material';
+import AutoFixHighOutlinedIcon from '@mui/icons-material/AutoFixHighOutlined';
 import CustomerFilters from '../components/CustomerFilters';
 import CustomerDetailsDrawer from '../components/CustomerDetailsDrawer';
 import CustomersTable from '../components/CustomersTable';
 import PageHeader from '../components/PageHeader';
 import { useData } from '../hooks/useData';
-import { deleteCustomer } from '../services/api';
+import { deleteCustomer, normalizeCustomerPrimaryNames } from '../services/api';
 import { buildCustomerVisitIndex, visitsForCustomer } from '../utils/customerVisits';
+import { customerPrimaryName, customerSearchText } from '../utils/customerDisplay';
 
 const emptyFilters = {
   name: '',
@@ -29,7 +31,9 @@ export default function Clientes() {
   const [selectedCustomerId, setSelectedCustomerId] = useState(null);
   const [customerPendingDelete, setCustomerPendingDelete] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isNormalizingNames, setIsNormalizingNames] = useState(false);
   const [actionError, setActionError] = useState(null);
+  const [actionSuccess, setActionSuccess] = useState(null);
 
   const segments = useMemo(() => unique(customers.map((customer) => customer.segment)), [customers]);
   const states = useMemo(() => unique(customers.map((customer) => customer.state)), [customers]);
@@ -37,7 +41,7 @@ export default function Clientes() {
 
   const filteredCustomers = useMemo(() => {
     return customers.filter((customer) => {
-      const nameMatch = includes(customer.name, filters.name);
+      const nameMatch = customerSearchText(customer).includes(String(filters.name || '').toLocaleLowerCase('pt-BR'));
       const cityMatch = includes(customer.city, filters.city);
       const stateMatch = !filters.state || customer.state === filters.state;
       const segmentMatch = !filters.segment || customer.segment === filters.segment;
@@ -66,10 +70,41 @@ export default function Clientes() {
     }
   }
 
+  async function handleNormalizeNames() {
+    setIsNormalizingNames(true);
+    setActionError(null);
+    setActionSuccess(null);
+    try {
+      const result = await normalizeCustomerPrimaryNames();
+      const changed = Number(result?.customersUpdated || 0) + Number(result?.snapshotsUpdated || 0);
+      setActionSuccess(changed
+        ? `${result.customersUpdated || 0} cadastros e ${result.snapshotsUpdated || 0} registros de rota foram atualizados.`
+        : 'Os nomes principais ja estavam corretos na base.');
+    } catch (error) {
+      setActionError(error.message || 'Nao foi possivel corrigir os nomes importados agora.');
+    } finally {
+      setIsNormalizingNames(false);
+    }
+  }
+
   return (
     <>
-      <PageHeader title="Clientes" subtitle="Base compartilhada com o app Android. Clique em um cliente para consultar todos os dados e feedbacks." />
+      <PageHeader
+        title="Clientes"
+        subtitle="Base compartilhada com o app Android. Clique em um cliente para consultar todos os dados e feedbacks."
+        action={(
+          <Button
+            variant="outlined"
+            startIcon={<AutoFixHighOutlinedIcon />}
+            onClick={handleNormalizeNames}
+            disabled={isNormalizingNames}
+          >
+            {isNormalizingNames ? 'Corrigindo nomes...' : 'Corrigir nomes importados'}
+          </Button>
+        )}
+      />
       {actionError && <Alert severity="error" sx={{ mb: 2 }}>{actionError}</Alert>}
+      {actionSuccess && <Alert severity="success" sx={{ mb: 2 }}>{actionSuccess}</Alert>}
       <CustomerFilters filters={filters} onChange={setFilters} segments={segments} states={states} statuses={statuses} />
       <CustomersTable
         customers={filteredCustomers}
@@ -90,7 +125,7 @@ export default function Clientes() {
       <Dialog open={Boolean(customerPendingDelete)} onClose={() => !isDeleting && setCustomerPendingDelete(null)}>
         <DialogTitle>Excluir cliente da base?</DialogTitle>
         <DialogContent>
-          O cadastro de {customerPendingDelete?.name || customerPendingDelete?.clientName || 'este cliente'} deixara de aparecer no app e no backoffice. O historico de visitas ja realizado sera preservado para auditoria.
+          O cadastro de {customerPrimaryName(customerPendingDelete)} deixara de aparecer no app e no backoffice. O historico de visitas ja realizado sera preservado para auditoria.
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setCustomerPendingDelete(null)} disabled={isDeleting}>Cancelar</Button>

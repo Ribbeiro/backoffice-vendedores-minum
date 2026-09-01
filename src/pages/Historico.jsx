@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useCallback, useMemo, useState } from 'react';
 import {
   Alert,
   Accordion,
@@ -22,13 +22,15 @@ import {
   Typography,
 } from '@mui/material';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import EmptyState from '../components/EmptyState';
 import PageHeader from '../components/PageHeader';
 import RouteReportPanel from '../components/RouteReportPanel';
 import RouteDetailsDrawer from '../components/RouteDetailsDrawer';
+import RouteEditDialog from '../components/RouteEditDialog';
 import { useData } from '../hooks/useData';
-import { deleteRoute } from '../services/api';
+import { deleteRoute, updateSharedRouteAssignment } from '../services/api';
 import { asArray } from '../utils/helpers';
 import { formatDate, formatDateTime } from '../utils/formatters';
 import {
@@ -76,20 +78,41 @@ const feedbackDateTime = (stop) => stop.updatedAt || stop.feedbackAt || stop.vis
 export default function Historico() {
   const { customers, routes, routeStops, users, visitEvents } = useData();
   const [routePendingDelete, setRoutePendingDelete] = useState(null);
+  const [routePendingEdit, setRoutePendingEdit] = useState(null);
   const [selectedRouteId, setSelectedRouteId] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [actionError, setActionError] = useState(null);
+  const [filteredRouteIds, setFilteredRouteIds] = useState(null);
   const usersById = useMemo(() => Object.fromEntries(users.map((user) => [user.id, user])), [users]);
   const customersByKey = useMemo(() => buildCustomerLookup(customers), [customers]);
+  const filteredRouteIdSet = useMemo(
+    () => (filteredRouteIds ? new Set(filteredRouteIds) : null),
+    [filteredRouteIds],
+  );
   const sortedRoutes = useMemo(
-    () => [...routes].sort((a, b) => Number(b.createdAt || b.createdAtTimestamp || 0) - Number(a.createdAt || a.createdAtTimestamp || 0)),
-    [routes],
+    () => routes
+      .filter((route) => !filteredRouteIdSet || filteredRouteIdSet.has(String(route.id)))
+      .sort((a, b) => Number(b.createdAt || b.createdAtTimestamp || 0) - Number(a.createdAt || a.createdAtTimestamp || 0)),
+    [routes, filteredRouteIdSet],
   );
   const telemetryByRoute = useMemo(
     () => new Map(buildRouteTelemetry(routes, routeStops, visitEvents).map((item) => [String(item.routeId), item])),
     [routes, routeStops, visitEvents],
   );
   const selectedRoute = selectedRouteId ? routes.find((route) => String(route.id) === String(selectedRouteId)) : null;
+
+  const handleFilteredRoutesChange = useCallback((filteredRoutes) => {
+    const nextIds = filteredRoutes
+      .map((route) => String(route.id))
+      .sort((first, second) => first.localeCompare(second));
+
+    setFilteredRouteIds((current) => {
+      if (current?.length === nextIds.length && current.every((routeId, index) => routeId === nextIds[index])) {
+        return current;
+      }
+      return nextIds;
+    });
+  }, []);
 
   async function handleDeleteRoute() {
     if (!routePendingDelete) return;
@@ -115,6 +138,7 @@ export default function Historico() {
         routeStops={routeStops}
         users={users}
         visitEvents={visitEvents}
+        onFilteredRoutesChange={handleFilteredRoutesChange}
       />
       <Stack spacing={1.5}>
         {sortedRoutes.map((route) => {
@@ -148,6 +172,18 @@ export default function Historico() {
                       }}
                     >
                       Resumo
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="text"
+                      startIcon={<EditOutlinedIcon fontSize="small" />}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setRoutePendingEdit(route);
+                      }}
+                    >
+                      Editar
                     </Button>
                     <Button
                       size="small"
@@ -213,7 +249,7 @@ export default function Historico() {
                             <TableRow>
                               <TableCell>{stop.order ?? stop.ordem ?? index + 1}</TableCell>
                               <TableCell>
-                                <Typography variant="body2" fontWeight={600}>{stop.customerName || stop.clienteNome || stop.name || stop.customerId || '-'}</Typography>
+                                <Typography variant="body2" fontWeight={600}>{stop.opportunity || stop.customerName || stop.clienteNome || stop.name || stop.customerId || '-'}</Typography>
                                 {attendances.length > 0 && <Typography variant="caption" color="text.secondary">{attendances.length} atendimento{attendances.length > 1 ? 's' : ''} registrado{attendances.length > 1 ? 's' : ''}</Typography>}
                               </TableCell>
                               <TableCell>{formatDateTime(latest.checkInAt || latest.arrivedAt || latest.arrivedAtClient)}</TableCell>
@@ -249,7 +285,12 @@ export default function Historico() {
             </Accordion>
           );
         })}
-        {sortedRoutes.length === 0 && <EmptyState title="Nenhuma rota encontrada" description="Quando uma rota for planejada no aplicativo, o acompanhamento e os feedbacks aparecerao aqui." />}
+        {sortedRoutes.length === 0 && (
+          <EmptyState
+            title={routes.length ? 'Nenhuma rota corresponde aos filtros' : 'Nenhuma rota encontrada'}
+            description={routes.length ? 'Ajuste ou limpe os filtros do relatorio para visualizar outras rotas.' : 'Quando uma rota for planejada no aplicativo, o acompanhamento e os feedbacks aparecerao aqui.'}
+          />
+        )}
       </Stack>
       <RouteDetailsDrawer
         route={selectedRoute}
@@ -258,6 +299,15 @@ export default function Historico() {
         stops={selectedRoute ? routeStops[selectedRoute.id] : []}
         seller={selectedRoute ? usersById[selectedRoute.sellerUid || selectedRoute.vendedor || selectedRoute.uid] : null}
         telemetry={selectedRoute ? telemetryByRoute.get(String(selectedRoute.id)) : null}
+      />
+      <RouteEditDialog
+        route={routePendingEdit}
+        stops={routePendingEdit ? routeStops[routePendingEdit.id] : []}
+        sellers={users.filter((user) => ['vendedor', 'seller', 'salesperson'].includes(String(user.role || '').toLowerCase()) || (!user.role && Boolean(user.state)))}
+        customers={customers}
+        open={Boolean(routePendingEdit)}
+        onClose={() => setRoutePendingEdit(null)}
+        onSave={updateSharedRouteAssignment}
       />
       <Dialog open={Boolean(routePendingDelete)} onClose={() => !isDeleting && setRoutePendingDelete(null)}>
         <DialogTitle>Excluir rota permanentemente?</DialogTitle>

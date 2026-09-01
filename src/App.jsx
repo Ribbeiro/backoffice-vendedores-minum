@@ -11,6 +11,7 @@ import Upload from './pages/Upload.jsx';
 import Usuarios from './pages/Usuarios.jsx';
 import Vendedores from './pages/Vendedores.jsx';
 import Revalidacao from './pages/Revalidacao.jsx';
+import Inteligencia from './pages/Inteligencia.jsx';
 
 export default function App() {
   return (
@@ -32,7 +33,7 @@ export default function App() {
           <Route path="criar-rota" element={<CriarRota />} />
           <Route path="upload" element={<Upload />} />
           <Route path="historico" element={<Historico />} />
-          <Route path="inteligencia" element={<Navigate to="/dashboard" replace />} />
+          <Route path="inteligencia" element={<Inteligencia />} />
           <Route path="vendedores" element={<Vendedores />} />
           <Route path="usuarios" element={<Usuarios />} />
         </Route>
