@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const { initializeApp, getApps } = require('firebase-admin/app');
 const { getDatabase } = require('firebase-admin/database');
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
-const { onValueCreated } = require('firebase-functions/v2/database');
+const { onValueCreated, onValueWritten } = require('firebase-functions/v2/database');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { defineSecret, defineString } = require('firebase-functions/params');
 const logger = require('firebase-functions/logger');
@@ -36,6 +36,8 @@ const {
 } = require('./src/revalidationService');
 const { createOdooClient } = require('./src/odooClient');
 const { processOdooVisitEvent, syncPendingOdooVisitEvents } = require('./src/odooVisitSyncService');
+const { enqueueOdooEvent, syncQueuedOdooVisitEvents } = require('./src/odooQueue');
+const { projectCustomer, rebuildSellerCustomers, sellerIdentity } = require('./src/sellerCustomers');
 const { verifyOdooJsonRpcConnection } = require('./src/odooConnectionVerifier');
 
 // A URL explicita permite que o Firebase CLI carregue os endpoints durante o
@@ -918,7 +920,9 @@ exports.syncPendingOdooVisitEvents = onSchedule(
       logger.info('Sincronizacao Odoo permanece desativada por configuracao.');
       return;
     }
-    const summary = await runOdooVisitSync();
+    const summary = await syncQueuedOdooVisitEvents({
+      database, odooClient: createRuntimeOdooClient(), maxEvents: odooSyncBatchSize(),
+    });
     logger.info('Lote de feedbacks Odoo processado.', {
       scanned: summary.scanned,
       counts: summary.counts,
@@ -931,6 +935,29 @@ exports.syncPendingOdooVisitEvents = onSchedule(
  * agendado continua como rede de seguranca para falhas temporarias,
  * indisponibilidade do Odoo ou eventos criados durante uma atualizacao.
  */
+// Queue every feedback change, including retries, manual sends and deletions.
+// Re-reading the canonical event in the worker handles out-of-order delivery.
+exports.queueOdooVisitEvent = onValueWritten(
+  { region: RTDB_TRIGGER_REGION, ref: '/visitEvents/{routeId}/{stopId}/{eventId}', retry: true },
+  async (event) => {
+    if (![event.data.before.val(), event.data.after.val()].some((value) => value?.eventType === 'feedback_submitted')) return;
+    await enqueueOdooEvent(database, `visitEvents/${event.params.routeId}/${event.params.stopId}/${event.params.eventId}`);
+  },
+);
+
+exports.projectSellerCustomer = onValueWritten(
+  { region: RTDB_TRIGGER_REGION, ref: '/customers/{customerId}', retry: true },
+  async (event) => projectCustomer(database, event.params.customerId),
+);
+
+exports.refreshSellerCustomers = onValueWritten(
+  { region: RTDB_TRIGGER_REGION, ref: '/users/{uid}', retry: true },
+  async (event) => {
+    if (sellerIdentity(event.data.before.val()) === sellerIdentity(event.data.after.val())) return;
+    await rebuildSellerCustomers(database, event.params.uid);
+  },
+);
+
 exports.syncOdooVisitEventOnCreate = onValueCreated(
   {
     region: RTDB_TRIGGER_REGION,

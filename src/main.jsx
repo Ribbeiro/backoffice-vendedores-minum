@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
+import { BrowserRouter } from 'react-router-dom';
 import { CssBaseline, ThemeProvider } from '@mui/material';
 import App from './App.jsx';
 import { AuthProvider } from './context/AuthContext.jsx';
@@ -16,9 +17,11 @@ function MinumThemeRoot() {
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <AuthProvider>
+        <BrowserRouter>
         <DataProvider>
           <App />
         </DataProvider>
+        </BrowserRouter>
       </AuthProvider>
     </ThemeProvider>
   );

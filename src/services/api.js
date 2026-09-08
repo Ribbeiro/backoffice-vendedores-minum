@@ -4,6 +4,10 @@ import {
   child,
   get,
   onValue,
+  query,
+  orderByChild,
+  limitToLast,
+  equalTo,
   push,
   ref,
   remove,
@@ -28,6 +32,16 @@ export function subscribePath(path, callback, onError) {
     (snapshot) => callback(snapshot.exists() ? snapshot.val() : {}),
     (error) => onError?.(error),
   );
+}
+
+export function subscribeRecentRoutes(limit, callback, onError) {
+  return onValue(query(ref(database, 'plannedRoutes'), orderByChild('createdAt'), limitToLast(limit)),
+    (snapshot) => callback(snapshot.val() || {}), onError);
+}
+
+export function subscribeRoutesByStatus(status, callback, onError) {
+  return onValue(query(ref(database, 'plannedRoutes'), orderByChild('status'), equalTo(status)),
+    (snapshot) => callback(snapshot.val() || {}), onError);
 }
 
 export async function importCustomers(customers, mode = 'merge') {

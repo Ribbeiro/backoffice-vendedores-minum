@@ -8,6 +8,10 @@ export default [
   { ignores: ['dist', 'functions/**'] },
   js.configs.recommended,
   {
+    files: ['scripts/**/*.cjs'],
+    languageOptions: { sourceType: 'commonjs', globals: { process: 'readonly', console: 'readonly' } },
+  },
+  {
     files: ['**/*.{js,jsx}'],
     languageOptions: {
       ecmaVersion: 2022,

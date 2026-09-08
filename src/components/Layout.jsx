@@ -76,7 +76,7 @@ export default function Layout() {
   const theme = useTheme();
   const isDesktop = useMediaQuery('(min-width:900px)');
   const { logout, profile } = useAuth();
-  const { error } = useData();
+  const { error, needsOperations, routeLimit, canLoadOlderRoutes, loadOlderRoutes, operationsLoading } = useData();
   const { mode, toggleColorMode } = useThemeMode();
   const navigate = useNavigate();
 
@@ -253,7 +253,16 @@ export default function Layout() {
       <Box component="main" flex={1} sx={{ p: { xs: 2, md: 3.5 }, mt: 8, width: { md: `calc(100% - ${drawerWidth}px)` }, transition: 'background-color 200ms ease' }}>
         <Box maxWidth={1600} mx="auto">
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-          <Outlet />
+          {needsOperations && (
+            <Alert severity="info" sx={{ mb: 2 }} action={canLoadOlderRoutes && (
+              <Button color="inherit" size="small" onClick={loadOlderRoutes} disabled={operationsLoading}>Carregar mais 50</Button>
+            )}>
+              {operationsLoading ? 'Atualizando rotas e atendimentos...' : `Indicadores e historico: ultimas ${routeLimit} rotas e rotas abertas. Carregue mais para consultar visitas e retornos antigos.`}
+            </Alert>
+          )}
+          <Box sx={{ display: needsOperations && operationsLoading ? 'none' : 'contents' }}>
+            <Outlet />
+          </Box>
         </Box>
       </Box>
     </Box>

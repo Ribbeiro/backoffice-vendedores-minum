@@ -14,7 +14,6 @@ import {
   Divider,
   IconButton,
   MenuItem,
-  Paper,
   Stack,
   TextField,
   Tooltip,
@@ -57,10 +56,6 @@ export default function RouteEditDialog({
   const routeCustomers = useMemo(
     () => routeStops.map((stop) => customerForStop(stop, customersById)).filter(Boolean),
     [routeStops, customersById],
-  );
-  const routeCustomersById = useMemo(
-    () => new Map(routeCustomers.map((customer) => [customerKey(customer), customer])),
-    [routeCustomers],
   );
   const allCustomersById = useMemo(
     () => new Map([...routeCustomers, ...customers].map((customer) => [customerKey(customer), customer])),
