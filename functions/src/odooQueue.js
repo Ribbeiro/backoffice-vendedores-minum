@@ -74,7 +74,8 @@ async function syncQueuedOdooVisitEvents({ database, odooClient, maxEvents = 20,
       return { ...candidate, version: candidate.version + 1, nextAttemptAt: now + LOCK_MS };
     });
     if (!lease.committed) continue;
-    const leaseVersion = lease.snapshot.val().version;
+    const leasedEntry = lease.snapshot.val();
+    const leaseVersion = leasedEntry.version;
     let next = now + 5 * 60 * 1000;
     try {
       const event = (await database.ref(entry.path).get()).val();
@@ -92,8 +93,11 @@ async function syncQueuedOdooVisitEvents({ database, odooClient, maxEvents = 20,
       results.push({ path: entry.path, status: 'failed', errorCode: String(error.code || 'queue_processing_error') });
     }
     await queueRef.transaction((current) => {
-      if (!current || current.version !== leaseVersion) return undefined;
-      return next === null ? null : { ...current, nextAttemptAt: next };
+      // Transactions can start with an empty Admin SDK cache. Reuse the
+      // committed lease until Firebase reruns the updater with server state.
+      const candidate = current ?? leasedEntry;
+      if (candidate.version !== leaseVersion) return undefined;
+      return next === null ? null : { ...candidate, nextAttemptAt: next };
     });
   }
   const counts = results.reduce((acc, result) => {

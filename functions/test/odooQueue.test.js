@@ -130,4 +130,19 @@ test('cold Admin transaction cache does not prevent acquiring a queued item', as
   }, { emptyTransactionCache: true });
   const result = await syncQueuedOdooVisitEvents({ database, odooClient: client });
   assert.equal(result.counts.synced, 1);
+  assert.deepEqual(database.root.odooSyncQueue, {});
+});
+
+test('cold Admin transaction cache preserves a retry scheduled after failure', async () => {
+  const database = fakeDatabase({
+    visitEvents: { r: { s: { e: feedback } } },
+    odooSyncQueue: { [queueKey(path)]: { path, version: 1, nextAttemptAt: 0 } },
+  }, { emptyTransactionCache: true });
+  const result = await syncQueuedOdooVisitEvents({
+    database,
+    odooClient: { ...client, ensureActivity: async () => { throw new Error('offline'); } },
+    now: 1_000,
+  });
+  assert.equal(result.counts.failed, 1);
+  assert.ok(database.root.odooSyncQueue[queueKey(path)].nextAttemptAt > 1_000);
 });
