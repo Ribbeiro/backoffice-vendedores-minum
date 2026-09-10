@@ -910,7 +910,7 @@ exports.revalidateCustomerCoordinates = onCall(
 exports.syncPendingOdooVisitEvents = onSchedule(
   {
     region: REGION,
-    schedule: 'every 5 minutes',
+    schedule: 'every 15 minutes',
     timeZone: 'America/Sao_Paulo',
     memory: '256MiB',
     secrets: [ODOO_API_KEY],
