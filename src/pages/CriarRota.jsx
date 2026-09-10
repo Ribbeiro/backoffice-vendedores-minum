@@ -41,6 +41,7 @@ import RoutePreviewMap from '../components/RoutePreviewMap';
 import { createSharedRouteAssignment, getSharedRoutePreview, optimizeSharedRoute } from '../services/api';
 import { useData } from '../hooks/useData';
 import { currencyBRL } from '../utils/formatters';
+import { expectedRevenueValue } from '../utils/money';
 import { distanceBetweenCustomersMeters } from '../utils/locationDistance';
 import { getSellerDisplayName, isCustomerAssignedToSeller } from '../utils/sellerCustomerAssignment';
 import { customerPrimaryName, customerSearchText } from '../utils/customerDisplay';
@@ -537,17 +538,9 @@ function displayCustomerName(customer) {
 }
 
 function formatExpectedRevenue(customer) {
-  const numericValue = customer?.expectedRevenueValue;
-  if (numericValue !== null && numericValue !== undefined && numericValue !== '') {
-    const parsedValue = Number(numericValue);
-    if (Number.isFinite(parsedValue)) return currencyBRL(parsedValue);
-  }
-
-  const rawValue = String(customer?.expectedRevenue || '').trim();
-  if (!rawValue) return '-';
-
-  const parsedValue = Number(rawValue);
-  return Number.isFinite(parsedValue) ? currencyBRL(parsedValue) : rawValue;
+  const parsedValue = expectedRevenueValue(customer);
+  if (parsedValue !== null) return currencyBRL(parsedValue);
+  return String(customer?.expectedRevenue || '').trim() || '-';
 }
 
 function formatDistance(meters) {

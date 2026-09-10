@@ -1,7 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const XLSX = require('xlsx');
-const { buildFirebaseCustomer, mergeCustomer, processOdooWorkbook } = require('../src/odooLeadProcessor');
+const {
+  buildFirebaseCustomer,
+  expectedRevenueNumberOrNull,
+  mergeCustomer,
+  processOdooWorkbook,
+} = require('../src/odooLeadProcessor');
 
 function createWorkbook(rows) {
   const worksheet = XLSX.utils.aoa_to_sheet(rows);
@@ -9,6 +14,30 @@ function createWorkbook(rows) {
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
   return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
 }
+
+test('interpreta corretamente os formatos monetarios recebidos do Odoo', () => {
+  assert.equal(expectedRevenueNumberOrNull('15.000'), 15000);
+  assert.equal(expectedRevenueNumberOrNull('15.000,00'), 15000);
+  assert.equal(expectedRevenueNumberOrNull('15,000.00'), 15000);
+  assert.equal(expectedRevenueNumberOrNull('15000.00'), 15000);
+  assert.equal(expectedRevenueNumberOrNull('R$ 15.000,00'), 15000);
+  assert.equal(expectedRevenueNumberOrNull('15,50'), 15.5);
+});
+
+test('salva a receita esperada agrupada como quinze mil no cliente Firebase', () => {
+  const customer = buildFirebaseCustomer({
+    ID: 'CL-RECEITA',
+    Opportunity: 'Cliente receita',
+    'Deal - Expected Revenue': '15.000',
+  }, {
+    jobId: 'job_receita',
+    importedBy: 'admin_test',
+    importedAt: 1,
+  });
+
+  assert.equal(customer.expectedRevenue, '15.000');
+  assert.equal(customer.expectedRevenueValue, 15000);
+});
 
 test('consolida marcadores isolados e preserva identificadores como texto', async () => {
   const source = createWorkbook([
