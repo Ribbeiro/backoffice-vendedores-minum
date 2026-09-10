@@ -11,6 +11,7 @@ import {
 import OperationalDetailsDrawer, { OperationalDrawerSection } from './OperationalDetailsDrawer';
 import StatusIndicator from './StatusIndicator';
 import { currencyBRL, formatDateTime } from '../utils/formatters';
+import { expectedRevenueValue } from '../utils/money';
 import { coordinatesFromCustomer, formatDistanceMeters } from '../utils/locationDistance';
 import { statusLabel } from '../utils/customerVisits';
 import { attendanceDurationSeconds } from '../utils/routeAttendances';
@@ -217,6 +218,8 @@ function VisitFeedback({ visit, route, user }) {
 }
 
 function valueForField(customer, field) {
+  if (field.type === 'currency') return expectedRevenueValue(customer);
+
   if (field.type === 'coordinates') {
     const coordinates = coordinatesFromCustomer(customer);
     return coordinates ? `${coordinates.latitude.toFixed(5)}, ${coordinates.longitude.toFixed(5)}` : null;

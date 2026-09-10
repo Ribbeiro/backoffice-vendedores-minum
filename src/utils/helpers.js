@@ -1,5 +1,7 @@
 ﻿import { normalizeDate, todayKey } from './formatters.js';
 
+import { parseMoneyValue } from './money.js';
+
 export const excelHeaders = [
   'Opportunity',
   '(CPF/CNPJ)',
@@ -78,7 +80,7 @@ export function normalizeCustomer(row, index) {
     responsableSalesperson,
     tags: clean(readCell(row, 'Deal - Tags', 'Tags_ID')),
     expectedRevenue,
-    expectedRevenueValue: numberOrNull(expectedRevenue),
+    expectedRevenueValue: parseMoneyValue(expectedRevenue),
     notes: clean(readCell(row, 'Deal - Notes', 'Quadro societario', 'Quadro societário')),
     origin: clean(readCell(row, 'Deal - Origem', 'Origem')),
     origem: clean(readCell(row, 'Deal - Origem', 'Origem')),

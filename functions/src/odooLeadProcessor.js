@@ -204,6 +204,56 @@ function numberOrNull(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function expectedRevenueNumberOrNull(value) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+
+  const compact = String(value)
+    .trim()
+    .replace(/[\s\u00a0]+/g, '')
+    .replace(/R\$/gi, '')
+    .replace(/[^\d.,+-]/g, '');
+  const match = compact.match(/^([+-]?)(\d[\d.,]*)$/);
+  if (!match) return null;
+
+  const sign = match[1] === '-' ? '-' : '';
+  const valueText = match[2];
+  const lastDot = valueText.lastIndexOf('.');
+  const lastComma = valueText.lastIndexOf(',');
+  let normalized;
+
+  if (lastDot >= 0 && lastComma >= 0) {
+    const decimalSeparator = lastDot > lastComma ? '.' : ',';
+    const thousandSeparator = decimalSeparator === '.' ? ',' : '.';
+    const parts = valueText.split(thousandSeparator).join('').split(decimalSeparator);
+    if (parts.length !== 2 || !parts.every((part) => /^\d+$/.test(part))) return null;
+    normalized = `${parts[0]}.${parts[1]}`;
+  } else {
+    const separator = lastDot >= 0 ? '.' : lastComma >= 0 ? ',' : null;
+    if (!separator) {
+      normalized = /^\d+$/.test(valueText) ? valueText : null;
+    } else {
+      const parts = valueText.split(separator);
+      if (!parts.every((part) => /^\d+$/.test(part))) return null;
+      if (parts.length === 2) {
+        normalized = parts[1].length === 3 ? parts.join('') : `${parts[0]}.${parts[1]}`;
+      } else if (parts.slice(1).every((part) => part.length === 3)) {
+        normalized = parts.join('');
+      } else {
+        const fraction = parts.at(-1);
+        const integerGroups = parts.slice(0, -1);
+        normalized = fraction.length <= 2 && integerGroups.slice(1).every((part) => part.length === 3)
+          ? `${integerGroups.join('')}.${fraction}`
+          : null;
+      }
+    }
+  }
+
+  if (!normalized) return null;
+  const parsed = Number(`${sign}${normalized}`);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function isValidCoordinates(latitude, longitude) {
   const lat = numberOrNull(latitude);
   const lon = numberOrNull(longitude);
@@ -1013,7 +1063,7 @@ function buildFirebaseCustomer(record, { jobId, importedBy, importedAt, minumCod
     responsableSalesperson: cleanCell(record['Deal - Responsable Salesperson']),
     tags: cleanCell(record['Deal - Tags']),
     expectedRevenue: cleanCell(record['Deal - Expected Revenue']),
-    expectedRevenueValue: numberOrNull(record['Deal - Expected Revenue']),
+    expectedRevenueValue: expectedRevenueNumberOrNull(record['Deal - Expected Revenue']),
     notes: cleanCell(record['Deal - Notes']),
     origin: cleanCell(record['Deal - Origem']),
     origem: cleanCell(record['Deal - Origem']),
@@ -1120,6 +1170,7 @@ module.exports = {
   TARGET_HEADERS,
   ProcessorError,
   buildFirebaseCustomer,
+  expectedRevenueNumberOrNull,
   isValidCoordinates,
   mergeCustomer,
   processOdooWorkbook,

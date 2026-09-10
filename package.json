@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint .",
+    "test:unit": "node --test test/expectedRevenue.test.js",
     "test:rules": "npx --yes firebase-tools@15.22.4 emulators:exec --only database \"node --test test/databaseRules.test.js\""
   },
   "dependencies": {

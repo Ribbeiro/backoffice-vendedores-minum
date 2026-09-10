@@ -14,6 +14,7 @@ import {
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import { useMemo, useState } from 'react';
 import { currencyBRL } from '../utils/formatters';
+import { expectedRevenueValue } from '../utils/money';
 import { customerContactName, customerPrimaryName } from '../utils/customerDisplay';
 import EmptyState from './EmptyState';
 
@@ -84,7 +85,7 @@ export default function CustomersTable({ customers, onCustomerSelect, selectedCu
                 <TableCell>{customer.segment || '-'}</TableCell>
                 <TableCell>{customer.pipelineStage || customer.status || '-'}</TableCell>
                 <TableCell>{customer.responsableSalesperson || customer.responsibleSalesperson || customer.responsavel || customer.responsible || '-'}</TableCell>
-                <TableCell align="right">{currencyBRL(customer.expectedRevenueValue ?? customer.expectedRevenue)}</TableCell>
+                <TableCell align="right">{currencyBRL(expectedRevenueValue(customer))}</TableCell>
                 <TableCell align="right">
                   <Tooltip title="Ver todos os dados do cliente">
                     <IconButton
