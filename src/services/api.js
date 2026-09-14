@@ -1,4 +1,5 @@
 /* global fetch */
+import { optimizeRoadRoute } from './roadOptimizer';
 
 import {
   child,
@@ -264,35 +265,17 @@ export async function getSharedRoutePreview(customers) {
 }
 
 /**
- * Otimiza somente os clientes intermediarios. A primeira e a ultima parada
- * continuam sendo a origem e o destino definidos pelo administrador.
+ * Mantem o inicio e escolhe um destino eficiente, salvo quando fixado pelo usuario.
  */
-export async function optimizeSharedRoute(customers) {
+export async function optimizeSharedRoute(customers, { keepLast = false } = {}) {
   if (customers.length < 3) {
     return { ...await getSharedRoutePreview(customers), order: customers.map((_, index) => index) };
   }
   validateRouteCustomers(customers);
 
-  const coordinates = serializeRouteCoordinates(customers);
-  const payload = await requestMapboxRoute(
-    `https://api.mapbox.com/optimized-trips/v1/mapbox/driving-traffic/${coordinates}?source=first&destination=last&roundtrip=false&geometries=geojson&overview=full&steps=false`,
-    'O Mapbox nao conseguiu otimizar a ordem das paradas.',
-  );
-  const trip = payload.trips?.[0];
-  const order = (payload.waypoints || [])
-    .map((waypoint, originalIndex) => ({
-      originalIndex,
-      routeIndex: Number(waypoint.waypoint_index),
-    }))
-    .filter(({ routeIndex }) => Number.isInteger(routeIndex))
-    .sort((first, second) => first.routeIndex - second.routeIndex)
-    .map(({ originalIndex }) => originalIndex);
-
-  if (!trip || order.length !== customers.length) {
-    throw new Error('O Mapbox retornou uma otimizacao incompleta. Tente novamente.');
-  }
-
-  return { ...toRoutePreview(trip), order };
+  const token = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN;
+  if (!token) throw new Error('Token publico do Mapbox nao configurado.');
+  return optimizeRoadRoute(customers, { token, preview: getSharedRoutePreview, keepLast });
 }
 
 /** Mantem a API anterior para consumidores que precisem apenas do total da rota. */

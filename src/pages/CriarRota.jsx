@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Autocomplete,
@@ -9,6 +9,7 @@ import {
   CircularProgress,
   Divider,
   FormControl,
+  FormControlLabel,
   Grid,
   IconButton,
   InputLabel,
@@ -65,6 +66,8 @@ export default function CriarRota() {
   const [preview, setPreview] = useState(null);
   const [isEstimating, setIsEstimating] = useState(false);
   const [isOptimizing, setIsOptimizing] = useState(false);
+  const [keepLast, setKeepLast] = useState(false);
+  const routeRevision = useRef(0);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -202,6 +205,7 @@ export default function CriarRota() {
   }
 
   function clearRoutePreview() {
+    routeRevision.current += 1;
     setEstimate(null);
     setPreview(null);
   }
@@ -215,8 +219,10 @@ export default function CriarRota() {
       return;
     }
     setIsEstimating(true);
+    const revision = routeRevision.current;
     try {
       const nextPreview = await getSharedRoutePreview(selectedCustomers);
+      if (revision !== routeRevision.current) return;
       setEstimate(nextPreview);
       setPreview(nextPreview);
     } catch (estimateError) {
@@ -235,8 +241,10 @@ export default function CriarRota() {
     }
 
     setIsOptimizing(true);
+    const revision = routeRevision.current;
     try {
-      const optimizedPreview = await optimizeSharedRoute(selectedCustomers);
+      const optimizedPreview = await optimizeSharedRoute(selectedCustomers, { keepLast });
+      if (revision !== routeRevision.current) return;
       const optimizedCustomers = optimizedPreview.order
         .map((originalIndex) => selectedCustomers[originalIndex])
         .filter(Boolean);
@@ -244,7 +252,9 @@ export default function CriarRota() {
       setSelectedIds(optimizedCustomers.map(customerKey));
       setEstimate(optimizedPreview);
       setPreview(optimizedPreview);
-      setSuccess('Ordem otimizada pelo Mapbox. Revise as paradas antes de atribuir a rota.');
+      setSuccess(optimizedPreview.savedDistanceMeters > 0
+        ? `Rota reorganizada: ${formatDistance(optimizedPreview.savedDistanceMeters)} a menos pelas ruas. Revise antes de atribuir.`
+        : 'A ordem atual foi mantida: nao encontramos um percurso mais curto pelas ruas.');
     } catch (optimizationError) {
       setError(optimizationError.message || 'Nao foi possivel otimizar a rota.');
     } finally {
@@ -254,6 +264,7 @@ export default function CriarRota() {
 
   async function handleSubmit(event) {
     event.preventDefault();
+    if (isSaving || isOptimizing || isEstimating) return;
     setError('');
     setSuccess('');
     if (!selectedSeller) {
@@ -355,13 +366,15 @@ export default function CriarRota() {
                 O mapa considera as ruas. No app, a primeira perna e recalculada a partir da localizacao do vendedor.
               </Typography>
               {estimate && <Chip label={`${formatDistance(estimate.distanceMeters)} - ${formatDuration(estimate.durationSeconds)}`} color="primary" variant="outlined" />}
-              <Button variant="outlined" startIcon={isEstimating ? <CircularProgress size={18} /> : <CalculateIcon />} onClick={handleEstimate} disabled={isEstimating || selectedCustomers.length === 0}>
+              <FormControlLabel control={<Checkbox checked={keepLast} onChange={(event) => { setKeepLast(event.target.checked); clearRoutePreview(); }} />} label="Manter a ultima parada como destino" />
+              <Typography variant="caption" color="text.secondary">A otimizacao preserva a primeira parada e busca reduzir a distancia pelas ruas, com ate 24 clientes.</Typography>
+              <Button variant="outlined" startIcon={isEstimating ? <CircularProgress size={18} /> : <CalculateIcon />} onClick={handleEstimate} disabled={isEstimating || isOptimizing || selectedCustomers.length === 0}>
                 Atualizar mapa
               </Button>
-              <Button variant="outlined" color="secondary" startIcon={isOptimizing ? <CircularProgress size={18} /> : <AutoFixHighIcon />} onClick={handleOptimizeRoute} disabled={isOptimizing || selectedCustomers.length < 2}>
+              <Button variant="outlined" color="secondary" startIcon={isOptimizing ? <CircularProgress size={18} /> : <AutoFixHighIcon />} onClick={handleOptimizeRoute} disabled={isOptimizing || isEstimating || selectedCustomers.length < 2}>
                 Otimizar rota
               </Button>
-              <Button type="submit" variant="contained" startIcon={isSaving ? <CircularProgress size={18} color="inherit" /> : <AddRoadIcon />} disabled={isSaving || !selectedSeller || selectedCustomers.length === 0}>
+              <Button type="submit" variant="contained" startIcon={isSaving ? <CircularProgress size={18} color="inherit" /> : <AddRoadIcon />} disabled={isSaving || isOptimizing || isEstimating || !selectedSeller || selectedCustomers.length === 0}>
                 Atribuir rota
               </Button>
             </Stack>
