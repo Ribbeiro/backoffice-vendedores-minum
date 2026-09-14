@@ -19,6 +19,17 @@ function fakeDatabase(root) {
 }
 
 const seller = { active: true, name: 'Joao da Silva', email: 'joao@minum.com', role: 'vendedor' };
+test('Odoo invisible formatting marks do not prevent matching the correct seller', async () => {
+  const { isCustomerAssignedToSeller: frontend } = await import('../../src/utils/sellerCustomerAssignment.js');
+  const yoshua = { name: 'YOSHUA YOHANAN DA SILVA MOTA', email: 'yoshua.mota@minum.com.br' };
+  for (const matcher of [isCustomerAssignedToSeller, frontend]) {
+    for (const mark of ['\u200e', '\u200f', '\u200b', '\u2066', '\ufeff']) {
+      assert.equal(matcher({ responsible: mark + yoshua.name }, yoshua), true);
+      assert.equal(matcher({ responsible: yoshua.name }, { ...yoshua, name: mark + yoshua.name }), true);
+      assert.equal(matcher({ responsible: mark + 'YOSHUA YOHANAN DA SILVA SOUZA' }, yoshua), false);
+    }
+  }
+});
 test('assignment keeps accented names, first/last names, multiple assignees and email compatibility', () => {
   assert.equal(isCustomerAssignedToSeller({ responsible: 'JOÃO SILVA' }, seller), true);
   assert.equal(isCustomerAssignedToSeller({ responsibleSalesperson: 'Maria Santos; JOAO@MINUM.COM' }, seller), true);

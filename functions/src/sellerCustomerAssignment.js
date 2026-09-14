@@ -70,6 +70,7 @@ function meaningfulNameTokens(value) {
 function normalizeIdentity(value) {
   return String(value || '')
     .normalize('NFKD')
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g, '')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .trim()
